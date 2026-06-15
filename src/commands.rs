@@ -87,7 +87,7 @@ pub fn run_doctor(project: &Project, args: DoctorArgs) -> Result<()> {
         }
     }
 
-    render_doctor_inventory(project, &graph);
+    render_doctor_inventory(&graph);
 
     if args.fix {
         let mut fixes = Vec::new();
@@ -137,10 +137,6 @@ pub fn run_copy(project: &Project, args: CopyArgs) -> Result<()> {
     if args.dry_run {
         println!("would write {}", plan.env_path.display());
         println!("{}", plan.env_contents);
-        for (path, contents) in &plan.dev_vars {
-            println!("would write {}", path.display());
-            println!("{}", contents);
-        }
         return Ok(());
     }
 
@@ -153,11 +149,6 @@ fn apply_copy_plan(plan: &crate::models::CopyPlan) -> Result<()> {
     fs::write(&plan.env_path, &plan.env_contents)
         .with_context(|| format!("failed to write {}", plan.env_path.display()))?;
     println!("wrote {}", plan.env_path.display());
-
-    for (path, contents) in &plan.dev_vars {
-        fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))?;
-        println!("wrote {}", path.display());
-    }
 
     Ok(())
 }
@@ -337,7 +328,6 @@ fn describe_fix(fix: &Fix) -> String {
             format!("add {name} to {}/.env.example", display_rel(app))
         }
         Fix::CreateLocalEnv => "create/update local .env from .env.example files".to_string(),
-        Fix::CreateDevVars { app } => format!("create {}/.dev.vars", display_rel(app)),
     }
 }
 
@@ -351,7 +341,7 @@ fn apply_fixes(project: &Project, fixes: &[Fix]) -> Result<()> {
                     .ok_or_else(|| anyhow!("unknown app {}", app.display()))?;
                 dotenv::upsert_example(&dotenv::example_path(workspace), name, "")?;
             }
-            Fix::CreateLocalEnv | Fix::CreateDevVars { .. } => {
+            Fix::CreateLocalEnv => {
                 should_copy = true;
             }
         }

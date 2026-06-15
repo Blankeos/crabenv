@@ -1,9 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use crate::discovery::app_workspaces;
 use crate::graph::EnvGraph;
-use crate::models::{EnvRecord, EnvSurface, Project, Scope};
+use crate::models::{EnvRecord, EnvSurface, Scope};
 use crate::util::{color, display_rel};
 
 pub fn render_list(graph: &EnvGraph) {
@@ -71,7 +70,7 @@ pub fn render_list(graph: &EnvGraph) {
     }
 }
 
-pub fn render_doctor_inventory(project: &Project, graph: &EnvGraph) {
+pub fn render_doctor_inventory(graph: &EnvGraph) {
     let grouped = group_records_by_name(graph);
     let mut rows = grouped
         .values()
@@ -91,7 +90,6 @@ pub fn render_doctor_inventory(project: &Project, graph: &EnvGraph) {
             .then_with(|| left.owner.cmp(&right.owner))
             .then_with(|| left.name.cmp(&right.name))
     });
-    let sink_files = sink_files(project, graph);
     let show_owner = rows.iter().any(|row| row.owner != ".");
     let name_width = rows
         .iter()
@@ -142,11 +140,6 @@ pub fn render_doctor_inventory(project: &Project, graph: &EnvGraph) {
                 row.name, schema, template, local, sinks
             );
         }
-    }
-
-    if !sink_files.is_empty() {
-        println!();
-        println!("sinks observed: {}", sink_files.join(", "));
     }
 }
 
@@ -272,63 +265,6 @@ fn optional_surface_cell(checked: bool) -> String {
         color("[x]", "32")
     } else {
         color("[-]", "90")
-    }
-}
-
-fn source_path(source: &str) -> Option<String> {
-    source
-        .rsplit_once(':')
-        .map(|(path, _)| path)
-        .filter(|path| !path.is_empty())
-        .map(|path| path.to_string())
-}
-
-fn display_source_path(project: &Project, path: &str) -> String {
-    let path = Path::new(path);
-    path.strip_prefix(&project.root)
-        .ok()
-        .filter(|path| !path.as_os_str().is_empty())
-        .map(display_rel)
-        .unwrap_or_else(|| display_rel(path))
-}
-
-fn sink_files(project: &Project, graph: &EnvGraph) -> Vec<String> {
-    let mut files = BTreeSet::new();
-
-    for record in graph.values() {
-        if let Some(sources) = record.surface_sources.get(&EnvSurface::Sinks) {
-            for source in sources {
-                if let Some(path) = source_path(source) {
-                    files.insert(display_source_path(project, &path));
-                }
-            }
-        }
-    }
-
-    for workspace in app_workspaces(project) {
-        let dockerfile = workspace.root.join("Dockerfile");
-        if dockerfile.exists() {
-            files.insert(display_workspace_file(&workspace.rel, "Dockerfile"));
-        }
-        let wrangler = workspace.root.join("wrangler.toml");
-        if wrangler.exists() {
-            files.insert(display_workspace_file(&workspace.rel, "wrangler.toml"));
-        }
-    }
-
-    let compose = project.root.join("docker-compose.yml");
-    if compose.exists() {
-        files.insert("docker-compose.yml".to_string());
-    }
-
-    files.into_iter().collect()
-}
-
-fn display_workspace_file(workspace_rel: &Path, filename: &str) -> String {
-    if workspace_rel == Path::new(".") {
-        filename.to_string()
-    } else {
-        display_rel(&workspace_rel.join(filename))
     }
 }
 

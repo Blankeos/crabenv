@@ -12,5 +12,5 @@ Expected `crabenv` behavior:
 - TypeScript apps use `@t3-oss/env-core`.
 - Python uses an existing config module, not a crabenv-specific config file.
 - `crabenv copy` should merge all app `.env.example` files into one root `.env`.
-- Docker and Cloudflare files should be treated as adapters/sinks, not core logic.
+- Docker and Cloudflare files are not inferred as sinks; future sink support should use explicit managed blocks.
 

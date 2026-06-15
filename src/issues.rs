@@ -106,21 +106,6 @@ pub fn collect_issues(project: &Project, graph: &EnvGraph) -> Result<Vec<Issue>>
                 fix: None,
             });
         }
-
-        if workspace.root.join("wrangler.toml").exists()
-            && !workspace.root.join(".dev.vars").exists()
-        {
-            issues.push(Issue {
-                severity: Severity::Info,
-                message: format!(
-                    "{} is a Cloudflare app without .dev.vars; crabenv copy can create it",
-                    display_rel(&workspace.rel)
-                ),
-                fix: Some(Fix::CreateDevVars {
-                    app: workspace.rel.clone(),
-                }),
-            });
-        }
     }
 
     for record in graph.values() {

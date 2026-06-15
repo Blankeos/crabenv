@@ -13,7 +13,7 @@ This project will once and for all solve environment variables. This CLI only do
 🤒 Pains solved:
 
 - [x] CRUD and Documentation drift
-- [x] Docker compose and Dockerfile drift (is this even possible, lmao)
+- [ ] Deployment/sink drift via explicit managed blocks, not arbitrary file inference
 - [x] `.env.example` and `env.ts` drift
 - [x] Validation
 - [x] Client and Server Boundaries
@@ -21,7 +21,7 @@ This project will once and for all solve environment variables. This CLI only do
 - [x] A better `cp .env.example .env` command (This is not enough!) Creating envs (local env or for new dev,staging,prod envs).
   - [x] Use templating patterns like `"RSA_KEY=$(openssl  rand -base64 32)` - the crabenv copy
 - [x] Rotating?? Kinda impossible actually.
-- [x] Cloudflare projects copy the .env into .dev.vars
+- [ ] Cloudflare `.dev.vars` guidance/docs
 
 ## Philosophy
 
@@ -30,7 +30,7 @@ This project will once and for all solve environment variables. This CLI only do
   - 1. **Schema** - The validator language-specific schema. Multiple based on apps. i.e. `env.ts`, `env.private.ts`, `env.public.ts`, `config.rs`, `config.dart`.
   - 2. **Template (`.env.example`)** - Safe example/template values for env values. Multiple based on apps.
   - 3. **Local (`.env`)** - The actual local runtime values/secrets. 1 only.
-  - 4. **Sinks (Docker, Wrangler)** (only if exists) - Multiple based on apps. i.e. `Dockerfile`, `docker-compose.yml`, `wrangler.toml`.
+  - 4. **Sinks** - Reserved for future explicit integrations. crabenv does not currently infer or rewrite arbitrary deployment files.
   - More? Make an adapter
 - Packages in monorepos don't have .env.
 
@@ -44,9 +44,9 @@ crabenv doctor     # It's a checklist of common mistakes
     - [x] schema
     - [x] template
     - [x] local
-    - [x] sinks (optional/read-only when present)
+    - [-] sinks (future explicit integrations)
   - [x] Only one .env
-  - [x] Cloudflare projects copy .env into .dev.vars
+  - [ ] Cloudflare `.dev.vars` guidance/docs
   - [x] Has with-env scripts to every project
   - [x] Consumption does not use
   - [x] Skip env validation in CI (based on CI=true env)

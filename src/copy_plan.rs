@@ -20,7 +20,6 @@ pub fn build_copy_plan(
         .map(|entry| (entry.key, entry.value))
         .collect::<HashMap<_, _>>();
 
-    let mut resolved = HashMap::<String, String>::new();
     let mut output = Vec::new();
     let shared_names = shared_schema_names(project)?;
     let sections = example_sections(project)?;
@@ -41,7 +40,6 @@ pub fn build_copy_plan(
                     overwrite,
                     &project.root,
                 );
-                resolved.insert(entry.key.clone(), value.clone());
                 shared_lines.push(format!("{}={}", entry.key, dotenv::quote_value(&value)));
             }
         }
@@ -69,7 +67,6 @@ pub fn build_copy_plan(
                 overwrite,
                 &project.root,
             );
-            resolved.insert(entry.key.clone(), value.clone());
             section_lines.push(format!("{}={}", entry.key, dotenv::quote_value(&value)));
         }
 
@@ -87,29 +84,10 @@ pub fn build_copy_plan(
     }
 
     let env_contents = format!("{}\n", output.join("\n").trim_end());
-    let mut dev_vars = Vec::new();
-
-    for app in app_workspaces(project) {
-        if !app.root.join("wrangler.toml").exists() {
-            continue;
-        }
-        let example = dotenv::example_path(app);
-        let entries = dotenv::parse_file(&example)?;
-        let mut lines = Vec::new();
-        for entry in entries {
-            let value = resolved.get(&entry.key).cloned().unwrap_or(entry.value);
-            lines.push(format!("{}={}", entry.key, dotenv::quote_value(&value)));
-        }
-        dev_vars.push((
-            app.root.join(".dev.vars"),
-            format!("{}\n", lines.join("\n")),
-        ));
-    }
 
     Ok(CopyPlan {
         env_path,
         env_contents,
-        dev_vars,
     })
 }
 

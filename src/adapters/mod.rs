@@ -2,11 +2,9 @@ use anyhow::Result;
 
 use crate::models::{Project, VarSource, Workspace};
 
-pub mod docker;
 pub mod dotenv;
 pub mod python;
 pub mod typescript;
-pub mod wrangler;
 
 pub trait WorkspaceAdapter {
     fn name(&self) -> &'static str;
@@ -24,9 +22,6 @@ struct DotenvRootLocalAdapter;
 struct TypeScriptPrivateAdapter;
 struct TypeScriptPublicAdapter;
 struct PythonAdapter;
-struct DockerfileAdapter;
-struct WranglerAdapter;
-struct DockerComposeAdapter;
 
 impl WorkspaceAdapter for DotenvExampleAdapter {
     fn name(&self) -> &'static str {
@@ -88,36 +83,6 @@ impl WorkspaceAdapter for PythonAdapter {
     }
 }
 
-impl WorkspaceAdapter for DockerfileAdapter {
-    fn name(&self) -> &'static str {
-        "dockerfile"
-    }
-
-    fn collect(&self, _project: &Project, workspace: &Workspace) -> Result<Vec<VarSource>> {
-        docker::collect_dockerfile(workspace)
-    }
-}
-
-impl WorkspaceAdapter for WranglerAdapter {
-    fn name(&self) -> &'static str {
-        "wrangler"
-    }
-
-    fn collect(&self, _project: &Project, workspace: &Workspace) -> Result<Vec<VarSource>> {
-        wrangler::collect(workspace)
-    }
-}
-
-impl ProjectAdapter for DockerComposeAdapter {
-    fn name(&self) -> &'static str {
-        "docker-compose"
-    }
-
-    fn collect(&self, project: &Project) -> Result<Vec<VarSource>> {
-        docker::collect_compose(project)
-    }
-}
-
 pub fn workspace_adapters() -> Vec<Box<dyn WorkspaceAdapter>> {
     vec![
         Box::new(DotenvExampleAdapter),
@@ -125,16 +90,11 @@ pub fn workspace_adapters() -> Vec<Box<dyn WorkspaceAdapter>> {
         Box::new(TypeScriptPrivateAdapter),
         Box::new(TypeScriptPublicAdapter),
         Box::new(PythonAdapter),
-        Box::new(DockerfileAdapter),
-        Box::new(WranglerAdapter),
     ]
 }
 
 pub fn project_adapters() -> Vec<Box<dyn ProjectAdapter>> {
-    vec![
-        Box::new(DotenvRootLocalAdapter),
-        Box::new(DockerComposeAdapter),
-    ]
+    vec![Box::new(DotenvRootLocalAdapter)]
 }
 
 pub fn workspace_has_owned_env_files(workspace: &Workspace) -> bool {

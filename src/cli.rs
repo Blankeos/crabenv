@@ -7,7 +7,7 @@ use crate::models::VarMutation;
 #[command(name = "crabenv")]
 #[command(about = "Adapter-first environment variable management")]
 #[command(
-    long_about = "crabenv manages environment variables across app owners without introducing a new config file.\n\nEnv config is synced across surfaces: schema files such as src/env.private.ts and src/env.public.ts, template files such as .env.example, the local .env, and sink files such as Docker or Wrangler. In monorepos, app owners live at paths like apps/web and shared variables are derived when the same variable exists in multiple owners."
+    long_about = "crabenv manages environment variables across app owners without introducing a new config file.\n\nEnv config is synced across surfaces: schema files such as src/env.private.ts and src/env.public.ts, template files such as .env.example, and the local .env. Sinks are reserved for future explicit integrations, not inferred from arbitrary deployment files. In monorepos, app owners live at paths like apps/web and shared variables are derived when the same variable exists in multiple owners."
 )]
 #[command(
     after_help = "Examples:\n  crabenv list\n  crabenv doctor\n  crabenv copy\n  crabenv add DATABASE_URL --owner apps/hono-api --example file:./local.db\n  crabenv add NEXT_PUBLIC_API_URL --owner apps/next-web --public --example http://localhost:8787\n  crabenv attach DATABASE_URL --from apps/hono-api --owner apps/next-web\n\nUse `crabenv <command> --help` for command-specific examples."
@@ -40,13 +40,13 @@ pub enum Commands {
     List,
     #[command(
         about = "Check env config surfaces for consistency",
-        long_about = "Check schema/template drift, missing required local values, monorepo .env placement, public runtimeEnvStrict mappings, and sink references such as Docker or Wrangler. Also prints a full per-variable surfaces checklist including local-only variables."
+        long_about = "Check schema/template drift, missing required local values, monorepo .env placement, and public runtimeEnvStrict mappings. Also prints a full per-variable surfaces checklist including local-only variables."
     )]
     Doctor(DoctorArgs),
     #[command(
         visible_alias = "cp",
         about = "Create or update local env files from examples",
-        long_about = "Create or update the local .env from discovered .env.example files. In monorepos this writes one root .env. For Cloudflare apps, it also writes .dev.vars. Existing non-empty local values are preserved unless --overwrite is passed."
+        long_about = "Create or update the local .env from discovered .env.example files. In monorepos this writes one root .env. Existing non-empty local values are preserved unless --overwrite is passed."
     )]
     Copy(CopyArgs),
     #[command(

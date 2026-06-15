@@ -45,8 +45,6 @@ pub enum SourceKind {
     EnvLocal,
     TsSchema,
     PythonSchema,
-    Docker,
-    Wrangler,
 }
 
 impl SourceKind {
@@ -55,7 +53,6 @@ impl SourceKind {
             SourceKind::TsSchema | SourceKind::PythonSchema => EnvSurface::Schema,
             SourceKind::EnvExample => EnvSurface::Template,
             SourceKind::EnvLocal => EnvSurface::Local,
-            SourceKind::Docker | SourceKind::Wrangler => EnvSurface::Sinks,
         }
     }
 }
@@ -142,7 +139,6 @@ impl Severity {
 pub enum Fix {
     BackfillExample { app: PathBuf, name: String },
     CreateLocalEnv,
-    CreateDevVars { app: PathBuf },
 }
 
 #[derive(Clone, Debug)]
@@ -163,5 +159,4 @@ pub struct VarMutation {
 pub struct CopyPlan {
     pub env_path: PathBuf,
     pub env_contents: String,
-    pub dev_vars: Vec<(PathBuf, String)>,
 }

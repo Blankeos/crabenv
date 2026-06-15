@@ -524,3 +524,7 @@ These should be settled during implementation, not ignored:
 5. Build `doctor` conflict reporting and fix plans.
 6. Add monorepo package discovery.
 7. Add release scaffolding copied from the `crabcode` pattern.
+# Historical Plan
+
+This was the first broad plan. Concrete Docker/Wrangler/Cloudflare sink scanning and writing from this document is no longer the current direction. See `BETTER_SINKS.md` for the updated sink plan: explicit managed blocks only, no arbitrary deployment-file inference.
+
