@@ -1,0 +1,38 @@
+[package]
+name = "crabenv"
+version = "0.1.0"
+edition = "2021"
+description = "A language-agnostic, adapter-first CLI for environment variable management"
+license = "MIT"
+repository = "https://github.com/blankeos/crabenv"
+homepage = "https://github.com/blankeos/crabenv"
+readme = "README.md"
+keywords = ["env", "cli", "config", "dotenv"]
+categories = ["command-line-utilities", "development-tools", "config"]
+authors = ["Carlo Taleon"]
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+regex = "1.10"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+shlex = "1.3"
+thiserror = "1.0"
+walkdir = "2.5"
+
+# Pinned early so the TypeScript adapter can move from targeted extraction to
+# AST-level edits without changing the public CLI shape.
+oxc_allocator = "0.135.0"
+oxc_parser = "0.135.0"
+oxc_span = "0.135.0"
+
+[dev-dependencies]
+assert_cmd = "2.0"
+tempfile = "3.13"
+
+[profile.dist]
+inherits = "release"
+lto = "thin"
+

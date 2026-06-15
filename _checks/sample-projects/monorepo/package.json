@@ -1,0 +1,19 @@
+{
+  "name": "crabenv-monorepo-fixture",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "crabenv:list": "crabenv list",
+    "crabenv:doctor": "crabenv doctor",
+    "crabenv:copy": "crabenv copy"
+  },
+  "devDependencies": {
+    "dotenv-cli": "^7.4.4",
+    "typescript": "^5.8.3"
+  }
+}
+

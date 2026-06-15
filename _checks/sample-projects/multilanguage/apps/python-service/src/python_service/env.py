@@ -1,0 +1,15 @@
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    database_url: str = Field(alias="PYTHON_DATABASE_URL")
+    secret_key: str = Field(min_length=32, alias="PYTHON_SECRET_KEY")
+    log_level: str = Field(default="info", alias="PYTHON_LOG_LEVEL")
+    allowed_origin: str = Field(alias="PYTHON_ALLOWED_ORIGIN")
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+
+settings = Settings()
+

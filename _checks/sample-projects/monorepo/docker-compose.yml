@@ -1,0 +1,13 @@
+services:
+  hono-api:
+    build:
+      context: ./apps/hono-api
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      HONO_API_PORT: ${HONO_API_PORT:-8787}
+      HONO_JWT_SECRET: ${HONO_JWT_SECRET}
+    ports:
+      - "8787:8787"
+

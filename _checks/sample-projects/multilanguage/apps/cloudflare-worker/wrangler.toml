@@ -1,0 +1,8 @@
+name = "crabenv-multilang-worker"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+
+[vars]
+PUBLIC_EDGE_ORIGIN = "http://localhost:8891"
+EDGE_QUEUE_NAME = "crabenv-events"
+

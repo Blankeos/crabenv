@@ -1,0 +1,24 @@
+{
+  "name": "@crabenv-fixture/next-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "with-env": "dotenv -e ../../.env --",
+    "dev": "pnpm with-env next dev",
+    "build": "pnpm with-env next build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@t3-oss/env-core": "^0.13.8",
+    "next": "^15.3.3",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "zod": "^3.25.64"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.32",
+    "@types/react": "^19.1.8",
+    "typescript": "^5.8.3"
+  }
+}
+

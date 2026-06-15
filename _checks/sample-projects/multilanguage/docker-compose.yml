@@ -1,0 +1,23 @@
+services:
+  python-service:
+    build:
+      context: ./apps/python-service
+    env_file:
+      - .env
+    environment:
+      PYTHON_DATABASE_URL: ${PYTHON_DATABASE_URL}
+      PYTHON_SECRET_KEY: ${PYTHON_SECRET_KEY}
+      PYTHON_LOG_LEVEL: ${PYTHON_LOG_LEVEL:-debug}
+
+  hono-api:
+    build:
+      context: ./apps/hono-api
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      HONO_SIGNING_SECRET: ${HONO_SIGNING_SECRET}
+      HONO_PORT: ${HONO_PORT:-8890}
+    ports:
+      - "8890:8890"
+

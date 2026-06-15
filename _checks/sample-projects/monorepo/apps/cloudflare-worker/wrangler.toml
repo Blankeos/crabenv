@@ -1,0 +1,9 @@
+name = "crabenv-fixture-worker"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+
+[vars]
+PUBLIC_WORKER_ORIGIN = "http://localhost:8788"
+WORKER_KV_NAMESPACE = "crabenv-fixture"
+WORKER_LOG_LEVEL = "debug"
+

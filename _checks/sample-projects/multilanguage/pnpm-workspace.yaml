@@ -1,0 +1,5 @@
+packages:
+  - "apps/next-web"
+  - "apps/hono-api"
+  - "apps/cloudflare-worker"
+

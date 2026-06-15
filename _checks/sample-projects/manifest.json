@@ -1,0 +1,73 @@
+{
+  "fixtures": [
+    {
+      "id": "basic-npm",
+      "path": "basic-npm",
+      "kind": "single-app",
+      "apps": [
+        {
+          "id": "basic-npm",
+          "language": "typescript",
+          "framework": "npm",
+          "envSchemas": ["src/env.private.ts", "src/env.public.ts"]
+        }
+      ]
+    },
+    {
+      "id": "monorepo",
+      "path": "monorepo",
+      "kind": "typescript-monorepo",
+      "apps": [
+        {
+          "id": "cloudflare-worker",
+          "language": "typescript",
+          "framework": "cloudflare-worker",
+          "envSchemas": ["src/env.private.ts", "src/env.public.ts"]
+        },
+        {
+          "id": "next-web",
+          "language": "typescript",
+          "framework": "nextjs",
+          "envSchemas": ["src/env.private.ts", "src/env.public.ts"]
+        },
+        {
+          "id": "hono-api",
+          "language": "typescript",
+          "framework": "hono",
+          "envSchemas": ["src/env.private.ts", "src/env.public.ts"]
+        }
+      ]
+    },
+    {
+      "id": "multilanguage",
+      "path": "multilanguage",
+      "kind": "mixed-monorepo",
+      "apps": [
+        {
+          "id": "python-service",
+          "language": "python",
+          "framework": "pydantic-settings",
+          "envSchemas": ["src/python_service/env.py"]
+        },
+        {
+          "id": "next-web",
+          "language": "typescript",
+          "framework": "nextjs",
+          "envSchemas": ["src/env.private.ts", "src/env.public.ts"]
+        },
+        {
+          "id": "hono-api",
+          "language": "typescript",
+          "framework": "hono",
+          "envSchemas": ["src/env.private.ts", "src/env.public.ts"]
+        },
+        {
+          "id": "cloudflare-worker",
+          "language": "typescript",
+          "framework": "cloudflare-worker",
+          "envSchemas": ["src/env.private.ts", "src/env.public.ts"]
+        }
+      ]
+    }
+  ]
+}

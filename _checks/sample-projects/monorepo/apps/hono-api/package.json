@@ -1,0 +1,21 @@
+{
+  "name": "@crabenv-fixture/hono-api",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "with-env": "dotenv -e ../../.env --",
+    "dev": "pnpm with-env tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@t3-oss/env-core": "^0.13.8",
+    "hono": "^4.7.11",
+    "tsx": "^4.20.3",
+    "zod": "^3.25.64"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.32",
+    "typescript": "^5.8.3"
+  }
+}
+
