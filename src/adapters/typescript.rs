@@ -41,7 +41,7 @@ pub fn schema_sources(path: &Path, owner: &Path, scope: Scope) -> Result<Vec<Var
     };
 
     let mut out = Vec::new();
-    let body_without_comments = strip_line_comments(&block.body);
+    let body_without_comments = strip_comments(&block.body);
     for entry in split_object_entries(&body_without_comments) {
         let cleaned_entry = entry
             .lines()
@@ -309,7 +309,7 @@ fn insert_object_entry(contents: &mut String, label: &str, line: &str) -> Result
 
 fn find_schema_expr(contents: &str, label: &str, variable: &str) -> Option<String> {
     let block = extract_object_block(contents, label)?;
-    let body_without_comments = strip_line_comments(&block.body);
+    let body_without_comments = strip_comments(&block.body);
     for entry in split_object_entries(&body_without_comments) {
         let cleaned_entry = entry
             .lines()
@@ -343,7 +343,7 @@ fn remove_object_entry(contents: &mut String, label: &str, variable: &str) -> Re
     Ok(())
 }
 
-fn strip_line_comments(contents: &str) -> String {
+fn strip_comments(contents: &str) -> String {
     let mut output = String::new();
     let mut chars = contents.chars().peekable();
     let mut in_string: Option<char> = None;
@@ -374,6 +374,19 @@ fn strip_line_comments(contents: &str) -> String {
                         output.push('\n');
                         break;
                     }
+                }
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                let mut previous = '\0';
+                for next in chars.by_ref() {
+                    if next == '\n' {
+                        output.push('\n');
+                    }
+                    if previous == '*' && next == '/' {
+                        break;
+                    }
+                    previous = next;
                 }
             }
             _ => output.push(ch),
@@ -576,4 +589,53 @@ fn expr_for_mutation(mutation: &VarMutation) -> String {
     }
 
     expr
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn schema_sources_ignores_jsdoc_comments_before_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("env.private.ts");
+        fs::write(
+            &path,
+            r#"
+import { createEnv } from "@t3-oss/env-core";
+import z from "zod";
+
+export const privateEnv = createEnv({
+  runtimeEnv: process.env,
+  server: {
+    /** Database URL. */
+    DATABASE_URL: z.string(),
+    /** Optional in development. */
+    DATABASE_AUTH_TOKEN: z
+      .string()
+      .optional()
+      .refine((val) => (process.env.NODE_ENV !== "development" ? !!val : true)),
+    // Regular line comments should still be ignored.
+    ZEPTOMAIL_FROM: z.string().refine((val) => /^[^<]*\s<[^>]+>$/.test(val), {
+      message: 'Must be in "Name <email@example.com>" format',
+    }),
+  },
+});
+"#,
+        )
+        .unwrap();
+
+        let sources = schema_sources(&path, Path::new("."), Scope::Private).unwrap();
+        let names = sources
+            .iter()
+            .map(|source| source.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            names,
+            vec!["DATABASE_URL", "DATABASE_AUTH_TOKEN", "ZEPTOMAIL_FROM"]
+        );
+        assert_eq!(sources[0].required, Some(true));
+        assert_eq!(sources[1].required, Some(false));
+    }
 }
