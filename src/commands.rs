@@ -9,7 +9,7 @@ use crate::discovery::app_workspaces;
 use crate::graph::{build_graph, EnvGraph};
 use crate::issues::collect_issues;
 use crate::models::{EnvRecord, EnvSurface, Fix, Project, Scope, Severity, VarMutation};
-use crate::render::render_list;
+use crate::render::{render_doctor_inventory, render_list};
 use crate::util::{color, display_rel, normalize_rel_display, validate_var_name};
 
 pub fn run_init(project: &Project, args: InitArgs) -> Result<()> {
@@ -73,19 +73,21 @@ pub fn run_list(project: &Project) -> Result<()> {
 }
 
 pub fn run_doctor(project: &Project, args: DoctorArgs) -> Result<()> {
-    let issues = collect_issues(project)?;
+    let graph = build_graph(project)?;
+    let issues = collect_issues(project, &graph)?;
     if issues.is_empty() {
         println!("crabenv doctor: {}", color("no issues found", "32"));
-        return Ok(());
-    }
-
-    println!("crabenv doctor: {} issue(s)", issues.len());
-    for issue in &issues {
-        println!("{} {}", severity_label(&issue.severity), issue.message);
-        if issue.fix.is_some() {
-            println!("      {}", color("fixable", "32"));
+    } else {
+        println!("crabenv doctor: {} issue(s)", issues.len());
+        for issue in &issues {
+            println!("{} {}", severity_label(&issue.severity), issue.message);
+            if issue.fix.is_some() {
+                println!("      {}", color("fixable", "32"));
+            }
         }
     }
+
+    render_doctor_inventory(project, &graph);
 
     if args.fix {
         let mut fixes = Vec::new();

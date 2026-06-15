@@ -1,9 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use crate::discovery::app_workspaces;
 use crate::graph::EnvGraph;
-use crate::models::{EnvRecord, EnvSurface, Scope};
-use crate::util::display_rel;
+use crate::models::{EnvRecord, EnvSurface, Project, Scope};
+use crate::util::{color, display_rel};
 
 pub fn render_list(graph: &EnvGraph) {
     let grouped = group_records_by_name(graph);
@@ -67,6 +68,85 @@ pub fn render_list(graph: &EnvGraph) {
             scope = widths.scope,
             type_width = widths.value_type,
         );
+    }
+}
+
+pub fn render_doctor_inventory(project: &Project, graph: &EnvGraph) {
+    let grouped = group_records_by_name(graph);
+    let mut rows = grouped
+        .values()
+        .map(|records| DoctorInventoryRow {
+            name: records
+                .first()
+                .map(|record| record.name.clone())
+                .unwrap_or_default(),
+            owner: format_group_owner(records),
+            surfaces: group_surfaces(records),
+        })
+        .collect::<Vec<_>>();
+
+    rows.sort_by(|left, right| {
+        list_owner_rank(&left.owner)
+            .cmp(&list_owner_rank(&right.owner))
+            .then_with(|| left.owner.cmp(&right.owner))
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    let sink_files = sink_files(project, graph);
+    let show_owner = rows.iter().any(|row| row.owner != ".");
+    let name_width = rows
+        .iter()
+        .map(|row| row.name.len())
+        .max()
+        .unwrap_or("name".len())
+        .max("name".len());
+    let owner_width = rows
+        .iter()
+        .map(|row| row.owner.len())
+        .max()
+        .unwrap_or("owner".len())
+        .max("owner".len());
+
+    println!();
+    println!("detected env vars: {}", rows.len());
+    println!();
+
+    if show_owner {
+        println!(
+            "{:<name_width$}  {:<owner_width$}  schema  template  local  sinks",
+            "name", "owner"
+        );
+        println!(
+            "{}  {}  ------  --------  -----  -----",
+            "-".repeat(name_width),
+            "-".repeat(owner_width),
+        );
+    } else {
+        println!("{:<name_width$}  schema  template  local  sinks", "name");
+        println!("{}  ------  --------  -----  -----", "-".repeat(name_width));
+    }
+
+    for row in rows {
+        let schema = required_surface_cell(row.surfaces.contains(&EnvSurface::Schema));
+        let template = required_surface_cell(row.surfaces.contains(&EnvSurface::Template));
+        let local = required_surface_cell(row.surfaces.contains(&EnvSurface::Local));
+        let sinks = optional_surface_cell(row.surfaces.contains(&EnvSurface::Sinks));
+
+        if show_owner {
+            println!(
+                "{:<name_width$}  {:<owner_width$}  {}     {}       {}    {}",
+                row.name, row.owner, schema, template, local, sinks
+            );
+        } else {
+            println!(
+                "{:<name_width$}  {}     {}       {}    {}",
+                row.name, schema, template, local, sinks
+            );
+        }
+    }
+
+    if !sink_files.is_empty() {
+        println!();
+        println!("sinks observed: {}", sink_files.join(", "));
     }
 }
 
@@ -158,11 +238,7 @@ fn format_group_type(records: &[&EnvRecord]) -> String {
 }
 
 fn format_group_surfaces(records: &[&EnvRecord]) -> String {
-    let surfaces = records
-        .iter()
-        .flat_map(|record| record.surfaces.iter())
-        .copied()
-        .collect::<BTreeSet<_>>();
+    let surfaces = group_surfaces(records);
 
     if surfaces.is_empty() {
         return "-".to_string();
@@ -173,6 +249,87 @@ fn format_group_surfaces(records: &[&EnvRecord]) -> String {
         .map(EnvSurface::as_str)
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn group_surfaces(records: &[&EnvRecord]) -> BTreeSet<EnvSurface> {
+    records
+        .iter()
+        .flat_map(|record| record.surfaces.iter())
+        .copied()
+        .collect::<BTreeSet<_>>()
+}
+
+fn required_surface_cell(checked: bool) -> String {
+    if checked {
+        color("[x]", "32")
+    } else {
+        color("[ ]", "33")
+    }
+}
+
+fn optional_surface_cell(checked: bool) -> String {
+    if checked {
+        color("[x]", "32")
+    } else {
+        color("[-]", "90")
+    }
+}
+
+fn source_path(source: &str) -> Option<String> {
+    source
+        .rsplit_once(':')
+        .map(|(path, _)| path)
+        .filter(|path| !path.is_empty())
+        .map(|path| path.to_string())
+}
+
+fn display_source_path(project: &Project, path: &str) -> String {
+    let path = Path::new(path);
+    path.strip_prefix(&project.root)
+        .ok()
+        .filter(|path| !path.as_os_str().is_empty())
+        .map(display_rel)
+        .unwrap_or_else(|| display_rel(path))
+}
+
+fn sink_files(project: &Project, graph: &EnvGraph) -> Vec<String> {
+    let mut files = BTreeSet::new();
+
+    for record in graph.values() {
+        if let Some(sources) = record.surface_sources.get(&EnvSurface::Sinks) {
+            for source in sources {
+                if let Some(path) = source_path(source) {
+                    files.insert(display_source_path(project, &path));
+                }
+            }
+        }
+    }
+
+    for workspace in app_workspaces(project) {
+        let dockerfile = workspace.root.join("Dockerfile");
+        if dockerfile.exists() {
+            files.insert(display_workspace_file(&workspace.rel, "Dockerfile"));
+        }
+        let wrangler = workspace.root.join("wrangler.toml");
+        if wrangler.exists() {
+            files.insert(display_workspace_file(&workspace.rel, "wrangler.toml"));
+        }
+    }
+
+    let compose = project.root.join("docker-compose.yml");
+    if compose.exists() {
+        files.insert("docker-compose.yml".to_string());
+    }
+
+    files.into_iter().collect()
+}
+
+fn display_workspace_file(workspace_rel: &Path, filename: &str) -> String {
+    if workspace_rel == Path::new(".") {
+        filename.to_string()
+    } else {
+        display_rel(&workspace_rel.join(filename))
+    }
 }
 
 fn record_has_schema_surface(record: &EnvRecord) -> bool {
@@ -235,4 +392,10 @@ impl ListWidths {
     fn total(&self) -> usize {
         self.index + self.name + self.owner + self.scope + self.value_type + self.surfaces + 10
     }
+}
+
+struct DoctorInventoryRow {
+    name: String,
+    owner: String,
+    surfaces: BTreeSet<EnvSurface>,
 }

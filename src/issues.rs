@@ -6,13 +6,12 @@ use std::path::Path;
 
 use crate::adapters::{dotenv, typescript};
 use crate::discovery::app_workspaces;
-use crate::graph::{build_graph, EnvGraph};
+use crate::graph::EnvGraph;
 use crate::models::{EnvSurface, Fix, Issue, Project, Severity, WorkspaceKind};
 use crate::util::display_rel;
 
-pub fn collect_issues(project: &Project) -> Result<Vec<Issue>> {
+pub fn collect_issues(project: &Project, graph: &EnvGraph) -> Result<Vec<Issue>> {
     let mut issues = Vec::new();
-    let graph = build_graph(project)?;
 
     if project.is_monorepo {
         if !project.root.join(".env").exists() {
@@ -57,7 +56,7 @@ pub fn collect_issues(project: &Project) -> Result<Vec<Issue>> {
             continue;
         }
 
-        let schema_vars = workspace_schema_vars(&workspace.rel, &graph);
+        let schema_vars = workspace_schema_vars(&workspace.rel, graph);
         let example_vars = dotenv::key_set(&dotenv::example_path(workspace))?;
 
         for name in schema_vars.difference(&example_vars) {
@@ -149,14 +148,14 @@ pub fn collect_issues(project: &Project) -> Result<Vec<Issue>> {
                 && (other.surfaces.contains(&EnvSurface::Schema)
                     || other.surfaces.contains(&EnvSurface::Template))
         });
-        if !has_definition_surface {
+        if !has_definition_surface && record.surfaces.contains(&EnvSurface::Local) {
             if matched_elsewhere {
                 continue;
             }
             issues.push(Issue {
                 severity: Severity::Warn,
                 message: format!(
-                    "{} exists in local or sink surfaces but is missing from schema and template",
+                    "{} exists in local but is missing from schema and template",
                     record.name
                 ),
                 fix: None,

@@ -40,7 +40,7 @@ pub enum Commands {
     List,
     #[command(
         about = "Check env config surfaces for consistency",
-        long_about = "Check schema/template drift, missing required local values, monorepo .env placement, public runtimeEnvStrict mappings, and sink references such as Docker or Wrangler."
+        long_about = "Check schema/template drift, missing required local values, monorepo .env placement, public runtimeEnvStrict mappings, and sink references such as Docker or Wrangler. Also prints a full per-variable surfaces checklist including local-only variables."
     )]
     Doctor(DoctorArgs),
     #[command(

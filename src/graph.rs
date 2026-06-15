@@ -34,6 +34,7 @@ pub fn build_graph(project: &Project) -> Result<EnvGraph> {
             example_value: None,
             local_present: false,
             surfaces: BTreeSet::new(),
+            surface_sources: BTreeMap::new(),
             sources: BTreeSet::new(),
         });
 
@@ -55,10 +56,15 @@ pub fn build_graph(project: &Project) -> Result<EnvGraph> {
         if matches!(source.kind, SourceKind::EnvLocal) {
             record.local_present = true;
         }
-        record.surfaces.insert(source.kind.surface());
+        let surface = source.kind.surface();
+        let source_location = format!("{}:{}", display_path(&source.path), source.line);
+        record.surfaces.insert(surface);
         record
-            .sources
-            .insert(format!("{}:{}", display_path(&source.path), source.line));
+            .surface_sources
+            .entry(surface)
+            .or_default()
+            .insert(source_location.clone());
+        record.sources.insert(source_location);
     }
 
     if project.is_monorepo {
@@ -67,10 +73,15 @@ pub fn build_graph(project: &Project) -> Result<EnvGraph> {
             for record in graph.values_mut() {
                 if root_local_names.contains(&record.name) {
                     record.local_present = true;
-                    record.surfaces.insert(SourceKind::EnvLocal.surface());
+                    let surface = SourceKind::EnvLocal.surface();
+                    let source_location = format!("{}:local", display_path(&local));
+                    record.surfaces.insert(surface);
                     record
-                        .sources
-                        .insert(format!("{}:local", display_path(&local)));
+                        .surface_sources
+                        .entry(surface)
+                        .or_default()
+                        .insert(source_location.clone());
+                    record.sources.insert(source_location);
                 }
             }
         }

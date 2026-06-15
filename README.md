@@ -44,7 +44,7 @@ crabenv doctor     # It's a checklist of common mistakes
     - [x] schema
     - [x] template
     - [x] local
-    - [x] sinks
+    - [x] sinks (optional/read-only when present)
   - [x] Only one .env
   - [x] Cloudflare projects copy .env into .dev.vars
   - [x] Has with-env scripts to every project

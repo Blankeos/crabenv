@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -104,6 +104,7 @@ pub struct EnvRecord {
     pub example_value: Option<String>,
     pub local_present: bool,
     pub surfaces: BTreeSet<EnvSurface>,
+    pub surface_sources: BTreeMap<EnvSurface, BTreeSet<String>>,
     pub sources: BTreeSet<String>,
 }
 
