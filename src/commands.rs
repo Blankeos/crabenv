@@ -4,7 +4,7 @@ use std::path::Path;
 
 use crate::adapters::{dotenv, python, typescript};
 use crate::cli::{AttachArgs, CopyArgs, DoctorArgs, InitArgs, MutateArgs, RemoveArgs};
-use crate::copy_plan::build_copy_plan;
+use crate::copy_plan::{build_copy_plan, build_root_example_plan};
 use crate::discovery::app_workspaces;
 use crate::graph::{build_graph, EnvGraph};
 use crate::issues::collect_issues;
@@ -135,8 +135,10 @@ pub fn run_copy(project: &Project, args: CopyArgs) -> Result<()> {
     let plan = build_copy_plan(project, !args.no_templates, args.overwrite)?;
 
     if args.dry_run {
-        println!("would write {}", plan.env_path.display());
-        println!("{}", plan.env_contents);
+        for write in &plan.writes {
+            println!("would write {}", write.path.display());
+            println!("{}", write.contents);
+        }
         return Ok(());
     }
 
@@ -146,10 +148,19 @@ pub fn run_copy(project: &Project, args: CopyArgs) -> Result<()> {
 }
 
 fn apply_copy_plan(plan: &crate::models::CopyPlan) -> Result<()> {
-    fs::write(&plan.env_path, &plan.env_contents)
-        .with_context(|| format!("failed to write {}", plan.env_path.display()))?;
-    println!("wrote {}", plan.env_path.display());
+    for write in &plan.writes {
+        fs::write(&write.path, &write.contents)
+            .with_context(|| format!("failed to write {}", write.path.display()))?;
+        println!("wrote {}", write.path.display());
+    }
 
+    Ok(())
+}
+
+fn apply_file_write(write: &crate::models::FileWritePlan) -> Result<()> {
+    fs::write(&write.path, &write.contents)
+        .with_context(|| format!("failed to write {}", write.path.display()))?;
+    println!("wrote {}", write.path.display());
     Ok(())
 }
 
@@ -185,7 +196,9 @@ pub fn run_add_or_update(project: &Project, args: MutateArgs, update: bool) -> R
         &apps,
     );
 
-    if !update {
+    if update {
+        sync_root_example(project)?;
+    } else {
         sync_local_env(project)?;
     }
 
@@ -253,6 +266,7 @@ pub fn run_remove(project: &Project, args: RemoveArgs) -> Result<()> {
 
     let apps = targets.iter().map(|(app, _)| *app).collect::<Vec<_>>();
     print_mutation_result("removed", &args.variable, &apps);
+    sync_root_example(project)?;
     Ok(())
 }
 
@@ -333,6 +347,7 @@ fn describe_fix(fix: &Fix) -> String {
 
 fn apply_fixes(project: &Project, fixes: &[Fix]) -> Result<()> {
     let mut should_copy = false;
+    let mut should_sync_root_example = false;
     for fix in fixes {
         match fix {
             Fix::BackfillExample { app, name } => {
@@ -340,6 +355,7 @@ fn apply_fixes(project: &Project, fixes: &[Fix]) -> Result<()> {
                     .find(|workspace| workspace.rel == *app)
                     .ok_or_else(|| anyhow!("unknown app {}", app.display()))?;
                 dotenv::upsert_example(&dotenv::example_path(workspace), name, "")?;
+                should_sync_root_example = true;
             }
             Fix::CreateLocalEnv => {
                 should_copy = true;
@@ -356,6 +372,8 @@ fn apply_fixes(project: &Project, fixes: &[Fix]) -> Result<()> {
                 no_templates: false,
             },
         )?;
+    } else if should_sync_root_example {
+        sync_root_example(project)?;
     }
     Ok(())
 }
@@ -363,6 +381,13 @@ fn apply_fixes(project: &Project, fixes: &[Fix]) -> Result<()> {
 fn sync_local_env(project: &Project) -> Result<()> {
     let plan = build_copy_plan(project, true, false)?;
     apply_copy_plan(&plan)
+}
+
+fn sync_root_example(project: &Project) -> Result<()> {
+    if let Some(plan) = build_root_example_plan(project)? {
+        apply_file_write(&plan)?;
+    }
+    Ok(())
 }
 
 fn select_app<'a>(

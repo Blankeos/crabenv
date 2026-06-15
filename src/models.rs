@@ -157,6 +157,11 @@ pub struct VarMutation {
 
 #[derive(Clone, Debug)]
 pub struct CopyPlan {
-    pub env_path: PathBuf,
-    pub env_contents: String,
+    pub writes: Vec<FileWritePlan>,
+}
+
+#[derive(Clone, Debug)]
+pub struct FileWritePlan {
+    pub path: PathBuf,
+    pub contents: String,
 }

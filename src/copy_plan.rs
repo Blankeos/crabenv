@@ -6,7 +6,7 @@ use std::process::Command;
 use crate::adapters::dotenv;
 use crate::discovery::app_workspaces;
 use crate::graph::collect_sources;
-use crate::models::{CopyPlan, DotenvEntry, Project, SourceKind};
+use crate::models::{CopyPlan, DotenvEntry, FileWritePlan, Project, SourceKind};
 use crate::util::display_rel;
 
 pub fn build_copy_plan(
@@ -20,27 +20,73 @@ pub fn build_copy_plan(
         .map(|entry| (entry.key, entry.value))
         .collect::<HashMap<_, _>>();
 
-    let mut output = Vec::new();
     let shared_names = shared_schema_names(project)?;
     let sections = example_sections(project)?;
+    let env_contents = render_env_contents(project, &sections, &shared_names, |entry| {
+        let value = copy_entry_value(
+            &entry.value,
+            &entry.key,
+            &existing,
+            execute_templates,
+            overwrite,
+            &project.root,
+        );
+        format!("{}={}", entry.key, dotenv::quote_value(&value))
+    });
+
+    let mut writes = vec![FileWritePlan {
+        path: env_path,
+        contents: env_contents,
+    }];
+
+    if project.is_monorepo {
+        writes.push(FileWritePlan {
+            path: root_example_path(project),
+            contents: render_env_contents(project, &sections, &shared_names, |entry| {
+                format!("{}={}", entry.key, dotenv::quote_value(&entry.value))
+            }),
+        });
+    }
+
+    Ok(CopyPlan { writes })
+}
+
+pub fn build_root_example_plan(project: &Project) -> Result<Option<FileWritePlan>> {
+    if !project.is_monorepo {
+        return Ok(None);
+    }
+
+    let shared_names = shared_schema_names(project)?;
+    let sections = example_sections(project)?;
+    Ok(Some(FileWritePlan {
+        path: root_example_path(project),
+        contents: render_env_contents(project, &sections, &shared_names, |entry| {
+            format!("{}={}", entry.key, dotenv::quote_value(&entry.value))
+        }),
+    }))
+}
+
+pub fn root_example_path(project: &Project) -> std::path::PathBuf {
+    project.root.join(".env.example")
+}
+
+fn render_env_contents(
+    project: &Project,
+    sections: &[ExampleSection],
+    shared_names: &BTreeSet<String>,
+    mut render_entry: impl FnMut(&DotenvEntry) -> String,
+) -> String {
+    let mut output = Vec::new();
 
     if project.is_monorepo && !shared_names.is_empty() {
         let mut shared_lines = Vec::new();
         let mut seen_shared = BTreeSet::new();
-        for section in &sections {
+        for section in sections {
             for entry in &section.entries {
                 if !shared_names.contains(&entry.key) || !seen_shared.insert(entry.key.clone()) {
                     continue;
                 }
-                let value = copy_entry_value(
-                    &entry.value,
-                    &entry.key,
-                    &existing,
-                    execute_templates,
-                    overwrite,
-                    &project.root,
-                );
-                shared_lines.push(format!("{}={}", entry.key, dotenv::quote_value(&value)));
+                shared_lines.push(render_entry(entry));
             }
         }
 
@@ -52,22 +98,14 @@ pub fn build_copy_plan(
     }
 
     let mut seen = BTreeSet::new();
-    for section in &sections {
+    for section in sections {
         let mut section_lines = Vec::new();
         for entry in &section.entries {
             if shared_names.contains(&entry.key) || seen.contains(&entry.key) {
                 continue;
             }
             seen.insert(entry.key.clone());
-            let value = copy_entry_value(
-                &entry.value,
-                &entry.key,
-                &existing,
-                execute_templates,
-                overwrite,
-                &project.root,
-            );
-            section_lines.push(format!("{}={}", entry.key, dotenv::quote_value(&value)));
+            section_lines.push(render_entry(entry));
         }
 
         if section_lines.is_empty() {
@@ -83,12 +121,7 @@ pub fn build_copy_plan(
         output.push(String::new());
     }
 
-    let env_contents = format!("{}\n", output.join("\n").trim_end());
-
-    Ok(CopyPlan {
-        env_path,
-        env_contents,
-    })
+    format!("{}\n", output.join("\n").trim_end())
 }
 
 fn shared_schema_names(project: &Project) -> Result<BTreeSet<String>> {
@@ -307,22 +340,51 @@ mod tests {
         };
 
         let plan = build_copy_plan(&project, false, true).unwrap();
+        let env_contents = write_contents(&plan, ".env");
+        let example_contents = write_contents(&plan, ".env.example");
 
-        assert!(plan
-            .env_contents
-            .starts_with("# ---- shared ----\nDATABASE_URL=file:./api.db"));
-        assert!(plan
-            .env_contents
-            .contains("\n# ---- apps/api/.env.example ----\nAPI_KEY=api"));
-        assert!(plan
-            .env_contents
-            .contains("\n# ---- apps/web/.env.example ----\nWEB_KEY=web"));
-        assert!(!plan
-            .env_contents
-            .contains("# ---- apps/api/.env.example ----\nDATABASE_URL"));
-        assert!(!plan
-            .env_contents
-            .contains("# ---- apps/web/.env.example ----\nDATABASE_URL"));
+        assert!(env_contents.starts_with("# ---- shared ----\nDATABASE_URL=file:./api.db"));
+        assert!(env_contents.contains("\n# ---- apps/api/.env.example ----\nAPI_KEY=api"));
+        assert!(env_contents.contains("\n# ---- apps/web/.env.example ----\nWEB_KEY=web"));
+        assert!(!env_contents.contains("# ---- apps/api/.env.example ----\nDATABASE_URL"));
+        assert!(!env_contents.contains("# ---- apps/web/.env.example ----\nDATABASE_URL"));
+
+        assert_eq!(env_contents, example_contents);
+    }
+
+    #[test]
+    fn monorepo_root_example_keeps_template_values() {
+        let tempdir = tempfile::tempdir().unwrap();
+        write_app_fixture(
+            tempdir.path(),
+            "apps/api",
+            "DATABASE_URL=file:$(pwd)/api.db\nAPI_KEY=api\n",
+        );
+
+        let project = Project {
+            root: tempdir.path().to_path_buf(),
+            is_monorepo: true,
+            workspaces: vec![test_workspace(tempdir.path(), "apps/api")],
+        };
+
+        let plan = build_copy_plan(&project, true, true).unwrap();
+        let env_contents = write_contents(&plan, ".env");
+        let example_contents = write_contents(&plan, ".env.example");
+
+        assert!(env_contents.contains(&format!(
+            "DATABASE_URL=file:{}/api.db",
+            tempdir.path().canonicalize().unwrap().display()
+        )));
+        assert!(example_contents.contains("DATABASE_URL=\"file:$(pwd)/api.db\""));
+        assert_eq!(plan.writes.len(), 2);
+    }
+
+    fn write_contents<'a>(plan: &'a CopyPlan, name: &str) -> &'a str {
+        plan.writes
+            .iter()
+            .find(|write| write.path.file_name().unwrap() == name)
+            .map(|write| write.contents.as_str())
+            .unwrap()
     }
 
     fn write_app_fixture(root: &Path, rel: &str, env_example: &str) {
