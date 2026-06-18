@@ -4,6 +4,17 @@ crabenv is an **opinionated**, language-agnostic CLI that keeps your environment
 
 This project will once and for all solve environment variables typesafe schema definition and documentation so it will never drift. This CLI only does what you can already do manually. So it doesn't introduce any new config files, if your team doesn't want to use crabenv. Completely fine too!
 
+## Installation
+
+```sh
+brew install blankeos/tap/crabenv # Homebrew (macOS/Linux)
+npm install -g crabenv            # or npm
+bun install -g crabenv            # or bun
+cargo binstall crabenv            # or cargo-binstall (prebuilt binary, faster)
+cargo install crabenv             # or cargo (build from source)
+curl -sSL https://raw.githubusercontent.com/Blankeos/crabenv/main/install.sh | sh # or linux/macos (via curl)
+```
+
 📁 Languages supported:
 
 - [x] TypeScript/Javascript and Monorepos (includes React, Solid, Vue, Svelte, Vite, NextJS, ReactNative, Backends, and Cloudflare apps)

@@ -1,6 +1,6 @@
 [package]
 name = "crabenv"
-version = "0.1.0"
+version = "0.0.0"
 edition = "2021"
 description = "The simplest, opinionated way to keep .env files, schemas, and examples aligned."
 license = "MIT"
@@ -10,6 +10,13 @@ readme = "README.md"
 keywords = ["env", "cli", "config", "dotenv"]
 categories = ["command-line-utilities", "development-tools", "config"]
 authors = ["Carlo Taleon"]
+include = [
+    "/Cargo.toml",
+    "/Cargo.lock",
+    "/src/**/*.rs",
+    "/README.md",
+    "/LICENSE",
+]
 
 [dependencies]
 anyhow = "1.0"
@@ -40,4 +47,3 @@ tempfile = "3.13"
 [profile.dist]
 inherits = "release"
 lto = "thin"
-

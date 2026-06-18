@@ -2,3 +2,8 @@
 /.env
 /.dev.vars
 
+# npm package artifacts
+/npm/bin/
+/npm/*.tar.xz
+/npm/*.zip
+
