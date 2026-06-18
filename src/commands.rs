@@ -165,7 +165,15 @@ fn apply_file_write(write: &crate::models::FileWritePlan) -> Result<()> {
 }
 
 pub fn run_add_or_update(project: &Project, args: MutateArgs, update: bool) -> Result<()> {
-    validate_var_name(&args.variable)?;
+    // If no variable was provided, launch the interactive wizard.
+    let args = if args.variable.is_none() {
+        crate::prompt::prompt_add_or_update(project, update)?
+    } else {
+        args
+    };
+
+    let variable = args.variable.as_deref().unwrap_or("");
+    validate_var_name(variable)?;
     let apps = select_mutation_apps(project, args.owner.as_deref(), args.shared)?;
 
     let scope = if args.public {
@@ -178,10 +186,13 @@ pub fn run_add_or_update(project: &Project, args: MutateArgs, update: bool) -> R
         .clone()
         .or_else(|| args.default_value.clone())
         .unwrap_or_default();
-    let mutation = VarMutation::from(&args);
+    let mutation = VarMutation {
+        variable: variable.to_string(),
+        ..VarMutation::from(&args)
+    };
 
     for app in &apps {
-        dotenv::upsert_example(&dotenv::example_path(app), &args.variable, &env_value)?;
+        dotenv::upsert_example(&dotenv::example_path(app), variable, &env_value)?;
 
         if app.framework == "python" {
             python::upsert_schema(app, &mutation)?;
@@ -192,7 +203,7 @@ pub fn run_add_or_update(project: &Project, args: MutateArgs, update: bool) -> R
 
     print_mutation_result(
         if update { "updated" } else { "added" },
-        &args.variable,
+        variable,
         &apps,
     );
 
@@ -206,47 +217,56 @@ pub fn run_add_or_update(project: &Project, args: MutateArgs, update: bool) -> R
 }
 
 pub fn run_attach(project: &Project, args: AttachArgs) -> Result<()> {
-    validate_var_name(&args.variable)?;
-    let target = select_app(project, Some(args.owner.as_path()))?;
+    // If no variable was provided, launch the interactive wizard.
+    let args = if args.variable.is_none() {
+        crate::prompt::prompt_attach(project)?
+    } else {
+        args
+    };
+
+    let variable = args.variable.as_deref().unwrap_or("");
+    let owner = args
+        .owner
+        .as_deref()
+        .ok_or_else(|| anyhow!("--owner is required (or run without args for interactive mode)"))?;
+
+    validate_var_name(variable)?;
+    let target = select_app(project, Some(owner))?;
     let graph = build_graph(project)?;
-    let source = select_attach_source(&graph, &args.variable, args.from.as_deref())?;
+    let source = select_attach_source(&graph, variable, args.from.as_deref())?;
     let source_owner = select_app(project, Some(source.owner.as_path()))?;
     let scope = source.scope.clone();
     if scope == Scope::Unknown {
-        bail!("{} has no schema scope to attach", args.variable);
+        bail!("{} has no schema scope to attach", variable);
     }
 
     let example_value = source
         .example_value
         .clone()
-        .or_else(|| example_value_for_name(&graph, &args.variable))
+        .or_else(|| example_value_for_name(&graph, variable))
         .or_else(|| source.default_value.clone())
         .unwrap_or_default();
 
     let mutation = mutation_from_record(source);
     let ts_expr = if source.owner == source_owner.rel {
-        typescript::read_schema_expr(source_owner, &args.variable, &scope)?
+        typescript::read_schema_expr(source_owner, variable, &scope)?
     } else {
         None
     };
 
-    dotenv::upsert_example(
-        &dotenv::example_path(target),
-        &args.variable,
-        &example_value,
-    )?;
+    dotenv::upsert_example(&dotenv::example_path(target), variable, &example_value)?;
 
     if target.framework == "python" {
         python::upsert_schema(target, &mutation)?;
     } else if let Some(expr) = ts_expr {
-        typescript::upsert_schema_expr(target, &args.variable, &scope, &expr)?;
+        typescript::upsert_schema_expr(target, variable, &scope, &expr)?;
     } else {
         typescript::upsert_schema(target, &mutation, &scope)?;
     }
 
     println!(
         "attached {} from {} to {}",
-        args.variable,
+        variable,
         display_rel(&source.owner),
         display_rel(&target.rel)
     );
@@ -257,15 +277,23 @@ pub fn run_attach(project: &Project, args: AttachArgs) -> Result<()> {
 }
 
 pub fn run_remove(project: &Project, args: RemoveArgs) -> Result<()> {
-    validate_var_name(&args.variable)?;
-    let targets = select_remove_targets(project, &args)?;
+    // If no variable was provided, launch the interactive wizard.
+    let args = if args.variable.is_none() {
+        crate::prompt::prompt_remove(project)?
+    } else {
+        args
+    };
+
+    let variable = args.variable.as_deref().unwrap_or("");
+    validate_var_name(variable)?;
+    let targets = select_remove_targets(project, &args, variable)?;
 
     for (app, scope) in &targets {
-        remove_from_app(app, &args.variable, scope)?;
+        remove_from_app(app, variable, scope)?;
     }
 
     let apps = targets.iter().map(|(app, _)| *app).collect::<Vec<_>>();
-    print_mutation_result("removed", &args.variable, &apps);
+    print_mutation_result("removed", variable, &apps);
     sync_root_example(project)?;
     Ok(())
 }
@@ -435,11 +463,12 @@ fn select_mutation_apps<'a>(
 fn select_remove_targets<'a>(
     project: &'a Project,
     args: &RemoveArgs,
+    variable: &str,
 ) -> Result<Vec<(&'a crate::models::Workspace, RemoveScope)>> {
     if args.shared || args.owner.as_deref().is_some_and(is_shared_owner_alias) {
-        let records = definition_records_for_variable(project, &args.variable)?;
+        let records = definition_records_for_variable(project, variable)?;
         if records.is_empty() {
-            bail!("{} was not found in any app owner", args.variable);
+            bail!("{} was not found in any app owner", variable);
         }
 
         let mut owners = records
@@ -463,7 +492,7 @@ fn select_remove_targets<'a>(
         return Ok(vec![(app, RemoveScope::Scope(remove_arg_scope(args)))]);
     }
 
-    let records = definition_records_for_variable(project, &args.variable)?;
+    let records = definition_records_for_variable(project, variable)?;
     if records.len() == 1 {
         let record = &records[0];
         let app = select_app(project, Some(record.owner.as_path()))?;
@@ -482,7 +511,7 @@ fn select_remove_targets<'a>(
             .join(", ");
         bail!(
             "{} exists in multiple owners ({owners}); pass --owner apps/name to remove one, or --shared to remove all",
-            args.variable
+            variable
         );
     }
 

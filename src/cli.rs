@@ -110,7 +110,7 @@ pub struct CopyArgs {
 #[derive(Args, Clone)]
 pub struct MutateArgs {
     #[arg(help = "Environment variable name, for example DATABASE_URL")]
-    pub variable: String,
+    pub variable: Option<String>,
 
     #[arg(
         long,
@@ -182,7 +182,7 @@ pub struct MutateArgs {
 impl From<&MutateArgs> for VarMutation {
     fn from(args: &MutateArgs) -> Self {
         Self {
-            variable: args.variable.clone(),
+            variable: args.variable.clone().unwrap_or_default(),
             example: args.example.clone(),
             optional: args.optional,
             default_value: args.default_value.clone(),
@@ -199,7 +199,7 @@ impl From<&MutateArgs> for VarMutation {
 #[derive(Args, Clone)]
 pub struct AttachArgs {
     #[arg(help = "Existing environment variable name to attach")]
-    pub variable: String,
+    pub variable: Option<String>,
 
     #[arg(
         long,
@@ -213,13 +213,13 @@ pub struct AttachArgs {
         value_name = "OWNER",
         help = "Target owner to add the existing contract to"
     )]
-    pub owner: PathBuf,
+    pub owner: Option<PathBuf>,
 }
 
 #[derive(Args, Clone)]
 pub struct RemoveArgs {
     #[arg(help = "Environment variable name to remove")]
-    pub variable: String,
+    pub variable: Option<String>,
 
     #[arg(
         long,

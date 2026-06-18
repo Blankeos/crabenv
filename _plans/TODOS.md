@@ -1,0 +1,7 @@
+- [ ] a crabenv fmt, that automatically sorts everything well...
+  - Rules:
+    - Group by proper prefixes i.e. `S3_*` and `RESEND_*` grouped together well.
+    - The env example usual groupings for `# --- apps/something ---` is important as well.
+    - Always put the standard envs to the very top i.e. `NODE_ENV` `CI`, the usual stuff you can find in a lot of places, it makes sense to make this deterministic.
+    - Preserve comments
+    - Preserve placeholder variables

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 
 mod adapters;
@@ -9,12 +9,17 @@ mod discovery;
 mod graph;
 mod issues;
 mod models;
+mod prompt;
 mod render;
 mod util;
 
 use cli::{Cli, Commands};
 
 fn main() -> Result<()> {
+    // Intercept Ctrl-C so cliclack prompts cancel gracefully (like ESC)
+    // instead of killing the process with the cursor hidden.
+    ctrlc::set_handler(|| {}).map_err(|e| anyhow!("setting Ctrl-C handler: {e}"))?;
+
     let cli = Cli::parse();
     let root = util::normalize_root(&cli.root)
         .with_context(|| format!("could not read root {}", cli.root.display()))?;
