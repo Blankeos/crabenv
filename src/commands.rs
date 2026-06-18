@@ -40,6 +40,14 @@ pub fn run_init(project: &Project, args: InitArgs) -> Result<()> {
         );
         if app.framework != "python" {
             println!(
+                "  env.ts: {}",
+                if typescript::should_use_plain_schema(app) {
+                    "present"
+                } else {
+                    "missing"
+                }
+            );
+            println!(
                 "  env.private.ts: {}",
                 if typescript::private_schema_path(app).exists() {
                     "present"
@@ -187,13 +195,10 @@ fn build_format_plan(project: &Project) -> Result<Vec<FileWritePlan>> {
                 paths.insert(local);
             }
         }
-        let private_schema = typescript::private_schema_path(app);
-        if private_schema.exists() {
-            paths.insert(private_schema);
-        }
-        let public_schema = typescript::public_schema_path(app);
-        if public_schema.exists() {
-            paths.insert(public_schema);
+        for (schema_path, _) in typescript::active_schema_paths(app) {
+            if schema_path.exists() {
+                paths.insert(schema_path);
+            }
         }
     }
 
@@ -201,7 +206,11 @@ fn build_format_plan(project: &Project) -> Result<Vec<FileWritePlan>> {
     for path in paths {
         let contents = fs::read_to_string(&path)
             .with_context(|| format!("failed to read {}", path.display()))?;
-        let formatted = if is_typescript_schema(&path, "env.private.ts") {
+        let formatted = if is_typescript_schema(&path, "env.ts") {
+            typescript::format_schema_contents(&contents, &Scope::Private).and_then(|contents| {
+                typescript::format_schema_contents(&contents, &Scope::Public)
+            })?
+        } else if is_typescript_schema(&path, "env.private.ts") {
             typescript::format_schema_contents(&contents, &Scope::Private)?
         } else if is_typescript_schema(&path, "env.public.ts") {
             typescript::format_schema_contents(&contents, &Scope::Public)?

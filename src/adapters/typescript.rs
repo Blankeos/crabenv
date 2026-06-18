@@ -9,11 +9,66 @@ pub fn private_schema_path(workspace: &Workspace) -> PathBuf {
     workspace.root.join("src/env.private.ts")
 }
 
+fn ensure_plain_schema_file(path: &Path) -> Result<()> {
+    if path.exists() {
+        return Ok(());
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("schema path has no parent"))?;
+    fs::create_dir_all(parent)?;
+    fs::write(
+        path,
+        r#"import { createEnv } from "@t3-oss/env-core";
+import { z } from "zod";
+
+export const env = createEnv({
+  emptyStringAsUndefined: true,
+  clientPrefix: "PUBLIC_",
+  server: {},
+  client: {},
+  runtimeEnvStrict: {},
+});
+"#,
+    )?;
+    Ok(())
+}
+
+pub fn active_schema_paths(workspace: &Workspace) -> Vec<(PathBuf, Scope)> {
+    if should_use_plain_schema(workspace) {
+        let path = plain_schema_path(workspace);
+        return vec![(path.clone(), Scope::Private), (path, Scope::Public)];
+    }
+
+    vec![
+        (private_schema_path(workspace), Scope::Private),
+        (public_schema_path(workspace), Scope::Public),
+    ]
+}
+
 pub fn public_schema_path(workspace: &Workspace) -> PathBuf {
     workspace.root.join("src/env.public.ts")
 }
 
+pub fn plain_schema_path(workspace: &Workspace) -> PathBuf {
+    workspace.root.join("src/env.ts")
+}
+
+pub fn should_use_plain_schema(workspace: &Workspace) -> bool {
+    plain_schema_path(workspace).exists()
+        && !private_schema_path(workspace).exists()
+        && !public_schema_path(workspace).exists()
+}
+
 pub fn collect_private_schema(workspace: &Workspace) -> Result<Vec<VarSource>> {
+    if should_use_plain_schema(workspace) {
+        return schema_sources(
+            &plain_schema_path(workspace),
+            &workspace.rel,
+            Scope::Private,
+        );
+    }
+
     let path = private_schema_path(workspace);
     if !path.exists() {
         return Ok(Vec::new());
@@ -22,6 +77,10 @@ pub fn collect_private_schema(workspace: &Workspace) -> Result<Vec<VarSource>> {
 }
 
 pub fn collect_public_schema(workspace: &Workspace) -> Result<Vec<VarSource>> {
+    if should_use_plain_schema(workspace) {
+        return schema_sources(&plain_schema_path(workspace), &workspace.rel, Scope::Public);
+    }
+
     let path = public_schema_path(workspace);
     if !path.exists() {
         return Ok(Vec::new());
@@ -126,11 +185,17 @@ pub fn format_schema_contents(contents: &str, scope: &Scope) -> Result<String> {
 
 pub fn upsert_schema(app: &Workspace, mutation: &VarMutation, scope: &Scope) -> Result<()> {
     let path = match scope {
+        Scope::Public if should_use_plain_schema(app) => plain_schema_path(app),
+        Scope::Private if should_use_plain_schema(app) => plain_schema_path(app),
         Scope::Public => public_schema_path(app),
         Scope::Private => private_schema_path(app),
         Scope::Unknown => bail!("unknown scope"),
     };
-    ensure_schema_file(&path, scope)?;
+    if should_use_plain_schema(app) {
+        ensure_plain_schema_file(&path)?;
+    } else {
+        ensure_schema_file(&path, scope)?;
+    }
 
     remove_schema(app, &mutation.variable, scope)?;
 
@@ -164,6 +229,8 @@ pub fn upsert_schema(app: &Workspace, mutation: &VarMutation, scope: &Scope) -> 
 
 pub fn remove_schema(app: &Workspace, variable: &str, scope: &Scope) -> Result<()> {
     let path = match scope {
+        Scope::Public if should_use_plain_schema(app) => plain_schema_path(app),
+        Scope::Private if should_use_plain_schema(app) => plain_schema_path(app),
         Scope::Public => public_schema_path(app),
         Scope::Private => private_schema_path(app),
         Scope::Unknown => return Ok(()),
@@ -187,6 +254,8 @@ pub fn remove_schema(app: &Workspace, variable: &str, scope: &Scope) -> Result<(
 
 pub fn read_schema_expr(app: &Workspace, variable: &str, scope: &Scope) -> Result<Option<String>> {
     let path = match scope {
+        Scope::Public if should_use_plain_schema(app) => plain_schema_path(app),
+        Scope::Private if should_use_plain_schema(app) => plain_schema_path(app),
         Scope::Public => public_schema_path(app),
         Scope::Private => private_schema_path(app),
         Scope::Unknown => return Ok(None),
@@ -211,11 +280,17 @@ pub fn upsert_schema_expr(
     expr: &str,
 ) -> Result<()> {
     let path = match scope {
+        Scope::Public if should_use_plain_schema(app) => plain_schema_path(app),
+        Scope::Private if should_use_plain_schema(app) => plain_schema_path(app),
         Scope::Public => public_schema_path(app),
         Scope::Private => private_schema_path(app),
         Scope::Unknown => bail!("unknown scope"),
     };
-    ensure_schema_file(&path, scope)?;
+    if should_use_plain_schema(app) {
+        ensure_plain_schema_file(&path)?;
+    } else {
+        ensure_schema_file(&path, scope)?;
+    }
     remove_schema(app, variable, scope)?;
 
     let mut contents = fs::read_to_string(&path)?;
@@ -971,5 +1046,79 @@ export const privateEnv = createEnv({
     DATABASE_URL: z.string(),"#
         ));
         assert!(!formatted.contains("\n    managed database URL elsewhere."));
+    }
+
+    #[test]
+    fn plain_env_ts_collects_server_as_private_and_client_as_public() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(
+            src.join("env.ts"),
+            r#"import { createEnv } from "@t3-oss/env-core";
+import { z } from "zod";
+
+export const env = createEnv({
+  emptyStringAsUndefined: true,
+  clientPrefix: "PUBLIC_",
+  server: {
+    DATABASE_URL: z.string().url(),
+  },
+  client: {
+    PUBLIC_APP_URL: z.string().url(),
+  },
+  runtimeEnvStrict: {
+    PUBLIC_APP_URL: process.env.PUBLIC_APP_URL,
+  },
+});
+"#,
+        )
+        .unwrap();
+        let workspace = Workspace {
+            root: dir.path().to_path_buf(),
+            rel: PathBuf::from("."),
+            kind: crate::models::WorkspaceKind::App,
+            framework: "typescript".to_string(),
+        };
+
+        let private = collect_private_schema(&workspace).unwrap();
+        let public = collect_public_schema(&workspace).unwrap();
+
+        assert!(should_use_plain_schema(&workspace));
+        assert_eq!(private.len(), 1);
+        assert_eq!(private[0].name, "DATABASE_URL");
+        assert_eq!(private[0].scope, Scope::Private);
+        assert_eq!(public.len(), 1);
+        assert_eq!(public[0].name, "PUBLIC_APP_URL");
+        assert_eq!(public[0].scope, Scope::Public);
+    }
+
+    #[test]
+    fn split_schema_files_take_precedence_over_plain_env_ts() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(
+            src.join("env.ts"),
+            r#"export const env = createEnv({ server: { PLAIN_ONLY: z.string() }, client: {} });"#,
+        )
+        .unwrap();
+        fs::write(
+            src.join("env.private.ts"),
+            r#"export const privateEnv = createEnv({ server: { SPLIT_ONLY: z.string() } });"#,
+        )
+        .unwrap();
+        let workspace = Workspace {
+            root: dir.path().to_path_buf(),
+            rel: PathBuf::from("."),
+            kind: crate::models::WorkspaceKind::App,
+            framework: "typescript".to_string(),
+        };
+
+        let private = collect_private_schema(&workspace).unwrap();
+
+        assert!(!should_use_plain_schema(&workspace));
+        assert_eq!(private.len(), 1);
+        assert_eq!(private[0].name, "SPLIT_ONLY");
     }
 }

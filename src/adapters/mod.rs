@@ -101,5 +101,6 @@ pub fn workspace_has_owned_env_files(workspace: &Workspace) -> bool {
     dotenv::example_path(workspace).exists()
         || typescript::private_schema_path(workspace).exists()
         || typescript::public_schema_path(workspace).exists()
+        || typescript::should_use_plain_schema(workspace)
         || python::find_env_file(&workspace.root).is_some()
 }

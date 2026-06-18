@@ -97,9 +97,10 @@ pub fn collect_issues(project: &Project, graph: &EnvGraph) -> Result<Vec<Issue>>
             });
         }
 
-        let public_ts = typescript::public_schema_path(workspace);
-        if public_ts.exists() {
-            typescript::check_public_runtime_strict(&public_ts, &workspace.rel, &mut issues)?;
+        for (path, scope) in typescript::active_schema_paths(workspace) {
+            if scope == crate::models::Scope::Public && path.exists() {
+                typescript::check_public_runtime_strict(&path, &workspace.rel, &mut issues)?;
+            }
         }
 
         let package_json = workspace.root.join("package.json");
