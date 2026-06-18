@@ -1,7 +1,6 @@
----
-title: Python
-description: How to setup crabenv for Python projects
----
+# Python
+
+> Pydantic settings conventions for env.py, Field aliases, and monorepo run scripts.
 
 Dependencies: `pydantic`, `pydantic-settings`; monorepo justfile examples use `dotenv-cli`
 

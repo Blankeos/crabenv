@@ -1,7 +1,6 @@
----
-title: Rust
-description: How to setup crabenv for Rust projects
----
+# Rust
+
+> Serde/Figment conventions for src/config.rs, explicit env renames, and workspace run scripts.
 
 Dependencies: `figment`, `serde`, `dotenvy`; monorepo justfile examples use `dotenv-cli`
 

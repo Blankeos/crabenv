@@ -47,6 +47,16 @@ curl -sSL https://raw.githubusercontent.com/Blankeos/crabenv/main/install.sh | s
   - More? Make an adapter
 - Packages in monorepos don't have .env.
 
+## Agent skill
+
+Install the crabenv skill for coding agents with:
+
+```sh
+npx skills add blankeos/crabenv
+```
+
+This installs the `crabenv` agent skill from `skills/crabenv`, including language-specific references for TypeScript/JavaScript, Python, Rust, and Flutter/Dart.
+
 ## Usage
 
 ```sh

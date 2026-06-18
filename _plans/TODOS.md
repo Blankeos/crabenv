@@ -8,3 +8,5 @@
   - The very core of this feature is also "sorting" so it might also make sense to standardize this sorting rule so that for displaying commands like "list/ls/doctor" or the select options when doing `crabenv add/delete/update`, they're shown properly
 
 - [x] a description system for env vars.. The rule we currently have is that they're stored in the schema files as comments just above the env var definition.
+
+- [ ] data sink template replacer. what will be the syntax pattern?

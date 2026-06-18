@@ -1,0 +1,51 @@
+{
+  "$schema": "https://raw.githubusercontent.com/blankeos/gittydocs/main/gittydocs.schema.json",
+  "site": {
+    "name": "crabenv",
+    "description": "An opinionated env var management standard and CLI for keeping schemas, templates, local envs, and deployment sinks aligned.",
+    "repo": {
+      "owner": "blankeos",
+      "name": "crabenv",
+      "ref": "main",
+      "docsPath": "docs"
+    }
+  },
+  "nav": [
+    {
+      "label": "Start Here",
+      "items": [
+        { "label": "Overview", "path": "/" },
+        { "label": "CLI Guide", "path": "/cli-guide" }
+      ]
+    }, 
+    {
+      "label": "Language Guides",
+      "items": [
+        { "label": "TypeScript / JavaScript", "path": "/language/typescript" },
+        { "label": "Python", "path": "/language/python" },
+        { "label": "Rust", "path": "/language/rust" },
+        { "label": "Flutter / Dart", "path": "/language/flutter" }
+      ]
+    },
+    {
+      "label": "Deployment Sinks",
+      "items": [
+        { "label": "GitHub Actions", "path": "/sinks/github-actions" }
+      ]
+    },
+    {
+      "label": "Agents",
+      "items": [
+        { "label": "crabenv Skill", "path": "/skill" }
+      ]
+    }
+  ],
+  "links": {
+    "github": "https://github.com/blankeos/crabenv",
+    "issues": "https://github.com/blankeos/crabenv/issues"
+  },
+  "llms": {
+    "enabled": true,
+    "path": "llms"
+  }
+}

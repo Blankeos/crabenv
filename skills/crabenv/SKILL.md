@@ -1,6 +1,6 @@
 ---
-title: Overview
-description: crabenv is an env var management standard created to minimize env var schema + documentation drift in any codebase
+name: crabenv
+description: Understand and apply the crabenv env var management standard: one local env, aligned schemas, templates, docs, and deployment sinks across languages.
 ---
 
 `crabenv` is an env var management standard created by [Carlo Taleon](http://carlo.tl) to minimize env var schema + documentation drift in any codebase. If you follow this standard, you'll find it extremely seamless to "develop locally" and "deploy to production" in any platform!
@@ -81,3 +81,36 @@ Special monorepo/multi-language repo rules:
    ```
 
 > For language-specific rules/examples, visit **Language Guides**.
+
+## CLI Guide
+
+Prefer the CLI when it is installed; otherwise apply the docs manually.
+
+```sh
+crabenv --help        # inspect current commands/options
+crabenv init          # create/align schema + .env.example
+crabenv copy          # create/update local .env from .env.example
+crabenv doctor        # detect drift and common mistakes
+crabenv doctor --fix  # apply safe fixes
+```
+
+CRUD commands (wizard-like when used without args, but unusable for agents):
+
+```sh
+crabenv list
+crabenv add VARIABLE_NAME --example "value" --optional
+crabenv update VARIABLE_NAME
+crabenv remove VARIABLE_NAME
+```
+
+Agent rule: run `crabenv --help` first, use the CLI for routine alignment, then edit files manually only when the CLI cannot express the needed change.
+
+## Skill references
+
+Use the concept above first. For exact language examples, read the matching reference file:
+
+- `references/typescript-javascript.md` — Schema conventions for @t3-oss/env-core, zod, public/private env files, and monorepo with-env scripts.
+- `references/python.md` — Pydantic settings conventions for env.py, Field aliases, and monorepo run scripts.
+- `references/rust.md` — Serde/Figment conventions for src/config.rs, explicit env renames, and workspace run scripts.
+- `references/flutter-dart.md` — String.fromEnvironment conventions, dart-define files, and public-only mobile env rules.
+- `references/github-actions.md` — Deployment sink notes for GitHub Actions.

@@ -1,7 +1,6 @@
----
-title: Flutter / Dart
-description: How to setup crabenv for Flutter/Dart projects
----
+# Flutter / Dart
+
+> String.fromEnvironment conventions, dart-define files, and public-only mobile env rules.
 
 Dependencies: none (Flutter SDK `String.fromEnvironment`); monorepo justfile examples use `dotenv-cli`
 

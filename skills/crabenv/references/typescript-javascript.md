@@ -1,7 +1,6 @@
----
-title: TypeScript
-description: How to setup crabenv for TypeScript projects
----
+# TypeScript / JavaScript
+
+> Schema conventions for @t3-oss/env-core, zod, public/private env files, and monorepo with-env scripts.
 
 Dependencies: `@t3-oss/env-core`, `zod`, `dotenv-cli`
 
