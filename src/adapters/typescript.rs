@@ -206,11 +206,8 @@ pub fn upsert_schema(app: &Workspace, mutation: &VarMutation, scope: &Scope) -> 
         "server"
     };
     let expr = expr_for_mutation(mutation);
-    insert_object_entry(
-        &mut contents,
-        label,
-        &format!("    {}: {},", mutation.variable, expr),
-    )?;
+    let entry = schema_entry_for_mutation(mutation, &expr);
+    insert_object_entry(&mut contents, label, &entry)?;
 
     if *scope == Scope::Public {
         insert_object_entry(
@@ -416,15 +413,32 @@ fn remove_object_entry(contents: &mut String, label: &str, variable: &str) -> Re
     let Some(block) = extract_object_block(contents, label) else {
         return Ok(());
     };
-    let mut new_body = Vec::new();
-    for line in block.body.lines() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with(&format!("{variable}:")) {
+    let entries = split_object_entries(&block.body);
+    if entries.is_empty() {
+        return Ok(());
+    }
+
+    let mut removed = false;
+    let mut body_lines = Vec::new();
+    for entry in entries {
+        if entry_key(&entry).as_deref() == Some(variable) {
+            removed = true;
             continue;
         }
-        new_body.push(line.to_string());
+        let ensure_comma = entry_key(&entry).is_some();
+        push_schema_entry(&mut body_lines, &entry, ensure_comma);
     }
-    contents.replace_range(block.start..block.end, &new_body.join("\n"));
+
+    if !removed {
+        return Ok(());
+    }
+
+    let new_body = if body_lines.is_empty() {
+        String::new()
+    } else {
+        format!("\n{}\n  ", body_lines.join("\n").trim_end())
+    };
+    contents.replace_range(block.start..block.end, &new_body);
     Ok(())
 }
 
@@ -903,6 +917,30 @@ fn expr_for_mutation(mutation: &VarMutation) -> String {
     expr
 }
 
+fn schema_entry_for_mutation(mutation: &VarMutation, expr: &str) -> String {
+    let entry = format!("    {}: {},", mutation.variable, expr);
+    let Some(description) = mutation.description.as_deref().map(str::trim) else {
+        return entry;
+    };
+    if description.is_empty() {
+        return entry;
+    }
+
+    let comment = description
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| format!("    // {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if comment.is_empty() {
+        entry
+    } else {
+        format!("{comment}\n{entry}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1046,6 +1084,97 @@ export const privateEnv = createEnv({
     DATABASE_URL: z.string(),"#
         ));
         assert!(!formatted.contains("\n    managed database URL elsewhere."));
+    }
+
+    #[test]
+    fn upsert_schema_writes_description_comment() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Workspace {
+            root: dir.path().to_path_buf(),
+            rel: PathBuf::from("."),
+            kind: crate::models::WorkspaceKind::App,
+            framework: "typescript".to_string(),
+        };
+
+        upsert_schema(
+            &workspace,
+            &VarMutation {
+                variable: "DATABASE_URL".to_string(),
+                description: Some("Local sqlite URL in development".to_string()),
+                example: None,
+                optional: false,
+                default_value: None,
+                numeric: false,
+                number: false,
+                boolean: false,
+                enum_values: None,
+                test_regex: None,
+                test_regex_message: None,
+            },
+            &Scope::Private,
+        )
+        .unwrap();
+
+        let contents = fs::read_to_string(private_schema_path(&workspace)).unwrap();
+        assert!(contents.contains(
+            r#"    // Local sqlite URL in development
+    DATABASE_URL: z.string(),"#
+        ));
+    }
+
+    #[test]
+    fn upsert_schema_replaces_old_description_comment() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Workspace {
+            root: dir.path().to_path_buf(),
+            rel: PathBuf::from("."),
+            kind: crate::models::WorkspaceKind::App,
+            framework: "typescript".to_string(),
+        };
+
+        upsert_schema(
+            &workspace,
+            &VarMutation {
+                variable: "DATABASE_URL".to_string(),
+                description: Some("Old description".to_string()),
+                example: None,
+                optional: false,
+                default_value: None,
+                numeric: false,
+                number: false,
+                boolean: false,
+                enum_values: None,
+                test_regex: None,
+                test_regex_message: None,
+            },
+            &Scope::Private,
+        )
+        .unwrap();
+        upsert_schema(
+            &workspace,
+            &VarMutation {
+                variable: "DATABASE_URL".to_string(),
+                description: Some("New description".to_string()),
+                example: None,
+                optional: false,
+                default_value: None,
+                numeric: false,
+                number: false,
+                boolean: false,
+                enum_values: None,
+                test_regex: None,
+                test_regex_message: None,
+            },
+            &Scope::Private,
+        )
+        .unwrap();
+
+        let contents = fs::read_to_string(private_schema_path(&workspace)).unwrap();
+        assert!(contents.contains(
+            r#"    // New description
+    DATABASE_URL: z.string(),"#
+        ));
+        assert!(!contents.contains("Old description"));
     }
 
     #[test]

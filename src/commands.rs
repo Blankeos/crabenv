@@ -456,6 +456,7 @@ fn mutation_from_record(record: &EnvRecord) -> VarMutation {
     let value_type = record.value_type.as_deref().unwrap_or("string");
     VarMutation {
         variable: record.name.clone(),
+        description: record.description.clone(),
         example: record.example_value.clone(),
         optional: record.required == Some(false) && record.default_value.is_none(),
         default_value: record.default_value.clone(),

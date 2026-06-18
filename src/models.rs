@@ -146,6 +146,7 @@ pub enum Fix {
 #[derive(Clone, Debug)]
 pub struct VarMutation {
     pub variable: String,
+    pub description: Option<String>,
     pub example: Option<String>,
     pub optional: bool,
     pub default_value: Option<String>,

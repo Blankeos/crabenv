@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use crate::cli::{AttachArgs, MutateArgs, RemoveArgs};
 use crate::discovery::app_workspaces;
 use crate::graph::{build_graph, EnvGraph};
-use crate::models::{EnvSurface, Project, Scope, Workspace};
+use crate::models::{EnvRecord, EnvSurface, Project, Scope, Workspace};
 use crate::ordering::sort_env_names;
 use crate::util::{display_rel, is_valid_var_name};
 
@@ -29,6 +29,11 @@ pub fn prompt_add_or_update(project: &Project, update: bool) -> Result<MutateArg
         "Add an env var"
     })?;
 
+    let graph = if update {
+        Some(build_graph(project)?)
+    } else {
+        None
+    };
     let apps = collect_apps(project);
     if apps.is_empty() {
         outro_cancel("No app owners found in this project.")?;
@@ -37,20 +42,38 @@ pub fn prompt_add_or_update(project: &Project, update: bool) -> Result<MutateArg
 
     // --- Variable name ---
     let variable = if update {
-        let graph = build_graph(project)?;
-        prompt_existing_var(&graph)?
+        prompt_existing_var(graph.as_ref().expect("update graph is present"))?
     } else {
         prompt_var_name()?
     };
 
     // --- Owner selection ---
-    let (owner, shared) = prompt_owner(&apps, "target")?;
+    let old_context = graph
+        .as_ref()
+        .map(|graph| UpdateContext::from_graph(graph, &variable));
+    let old_owner = old_context.as_ref().and_then(UpdateContext::owner_hint);
+    let (owner, shared) = prompt_owner(&apps, "target", old_owner.as_ref())?;
+
+    let selected_old = old_context
+        .as_ref()
+        .and_then(|context| context.for_owner(&owner, shared));
 
     // --- Scope (private/public) ---
-    let public = prompt_scope()?;
+    let public = prompt_scope(selected_old.as_ref().map(|record| &record.scope))?;
 
     // --- Type selection ---
-    let (numeric, number, boolean, string, enum_values) = prompt_type_bundle()?;
+    let (numeric, number, boolean, string, enum_values) = prompt_type_bundle(
+        selected_old
+            .as_ref()
+            .and_then(|record| record.value_type.as_deref()),
+    )?;
+
+    // --- Description ---
+    let description = prompt_description(
+        selected_old
+            .as_ref()
+            .and_then(|record| record.description.as_deref()),
+    )?;
 
     // --- Example value ---
     let placeholder = if number || numeric {
@@ -60,17 +83,34 @@ pub fn prompt_add_or_update(project: &Project, update: bool) -> Result<MutateArg
     } else {
         "e.g. file:./local.db or http://localhost:8787"
     };
-    let example = prompt_example(placeholder)?;
+    let example = prompt_example(
+        placeholder,
+        selected_old
+            .as_ref()
+            .and_then(|record| record.example_value.as_deref()),
+    )?;
 
     // --- Optional / default ---
+    let old_optional = selected_old
+        .as_ref()
+        .and_then(|record| record.required)
+        .map(|required| !required)
+        .unwrap_or(false);
     let optional = confirm("Mark as optional?")
-        .initial_value(false)
+        .initial_value(old_optional)
         .interact()?;
 
     let default_value = if optional {
-        let val: String = input("Default value (leave empty for none)")
-            .placeholder("optional default")
-            .interact()?;
+        let mut prompt = input("Default value (leave empty for none)");
+        if let Some(value) = selected_old
+            .as_ref()
+            .and_then(|record| record.default_value.as_deref())
+        {
+            prompt = prompt.default_input(value);
+        } else {
+            prompt = prompt.placeholder("optional default");
+        }
+        let val: String = prompt.interact()?;
         if val.trim().is_empty() {
             None
         } else {
@@ -102,6 +142,7 @@ pub fn prompt_add_or_update(project: &Project, update: bool) -> Result<MutateArg
         shared,
         public,
         example,
+        description,
         optional,
         default_value,
         string,
@@ -306,11 +347,125 @@ fn collect_apps(project: &Project) -> Vec<&Workspace> {
     app_workspaces(project).collect()
 }
 
+#[derive(Clone, Debug)]
+struct UpdateContext {
+    records: Vec<EnvRecord>,
+}
+
+impl UpdateContext {
+    fn from_graph(graph: &EnvGraph, variable: &str) -> Self {
+        let mut records = graph
+            .values()
+            .filter(|record| record.name == variable)
+            .filter(|record| {
+                record.surfaces.contains(&EnvSurface::Schema)
+                    || record.surfaces.contains(&EnvSurface::Template)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        records.sort_by(|a, b| a.owner.cmp(&b.owner));
+        Self { records }
+    }
+
+    fn owner_hint(&self) -> Option<PathBuf> {
+        if self.records.len() == 1 {
+            self.records.first().map(|record| record.owner.clone())
+        } else {
+            None
+        }
+    }
+
+    fn for_owner(&self, owner: &PathBuf, shared: bool) -> Option<EnvRecord> {
+        if shared {
+            return common_record(&self.records);
+        }
+
+        self.records
+            .iter()
+            .find(|record| record.owner == *owner)
+            .cloned()
+            .or_else(|| common_record(&self.records))
+    }
+}
+
+fn common_record(records: &[EnvRecord]) -> Option<EnvRecord> {
+    let first = records.first()?.clone();
+    Some(EnvRecord {
+        scope: common_by(records, |record| &record.scope).unwrap_or(Scope::Unknown),
+        value_type: common_by(records, |record| &record.value_type).flatten(),
+        required: common_by(records, |record| &record.required).flatten(),
+        default_value: common_by(records, |record| &record.default_value).flatten(),
+        description: common_by(records, |record| &record.description).flatten(),
+        example_value: common_by(records, |record| &record.example_value).flatten(),
+        ..first
+    })
+}
+
+fn common_by<T: Eq + Clone>(records: &[EnvRecord], value: impl Fn(&EnvRecord) -> &T) -> Option<T> {
+    let first = value(records.first()?).clone();
+    records
+        .iter()
+        .all(|record| value(record) == &first)
+        .then_some(first)
+}
+
+fn scope_choice(scope: &Scope) -> Option<&'static str> {
+    match scope {
+        Scope::Private => Some("private"),
+        Scope::Public => Some("public"),
+        Scope::Unknown => None,
+    }
+}
+
+fn type_choice(value_type: &str) -> Option<&'static str> {
+    match value_type {
+        "number" => Some("number"),
+        "boolean" => Some("boolean"),
+        value if value.starts_with("enum") => Some("enum"),
+        "string" => Some("string"),
+        _ => None,
+    }
+}
+
+fn type_marker(label: &str, choice: &str, initial: Option<&str>, old_type: Option<&str>) -> String {
+    if initial == Some(choice) {
+        return match old_type {
+            Some(old_type) if old_type != label => format!("{label} (old: {old_type})"),
+            _ => old_marker(label, true),
+        };
+    }
+
+    match (choice, old_type) {
+        ("numeric", Some("regex")) => format!("{label} (old: regex)"),
+        ("string", Some("url")) => format!("{label} (old: url)"),
+        ("string", Some(old_type)) if type_choice(old_type).is_none() && old_type != "regex" => {
+            format!("{label} (old: {old_type})")
+        }
+        _ => label.to_string(),
+    }
+}
+
+fn old_marker(label: &str, is_old: bool) -> String {
+    if is_old {
+        format!("{label} (old value)")
+    } else {
+        label.to_string()
+    }
+}
+
 /// A filterable select that keeps cliclack's original radio-circle option UI.
 ///
 /// Options are visible immediately, typing fuzzy-filters the list, and the
 /// cursor wraps in both directions via our local cliclack patch.
 fn prompt_searchable(message: &str, _placeholder: &str, candidates: Vec<String>) -> Result<String> {
+    prompt_searchable_with_initial(message, candidates, None)
+}
+
+fn prompt_searchable_with_initial(
+    message: &str,
+    candidates: Vec<String>,
+    initial: Option<&str>,
+) -> Result<String> {
     if candidates.len() == 1 {
         return Ok(candidates.into_iter().next().unwrap());
     }
@@ -318,6 +473,9 @@ fn prompt_searchable(message: &str, _placeholder: &str, candidates: Vec<String>)
     let mut prompt = select(message).filter_mode().max_rows(10);
     for candidate in candidates {
         prompt = prompt.item(candidate.clone(), candidate, "");
+    }
+    if let Some(initial) = initial {
+        prompt = prompt.initial_value(initial.to_string());
     }
 
     Ok(prompt.interact()?)
@@ -359,18 +517,23 @@ fn prompt_existing_var(graph: &EnvGraph) -> Result<String> {
     prompt_searchable("Select a variable", "type to search…", names)
 }
 
-fn prompt_owner(apps: &[&Workspace], label: &str) -> Result<(PathBuf, bool)> {
+fn prompt_owner(
+    apps: &[&Workspace],
+    label: &str,
+    initial_owner: Option<&PathBuf>,
+) -> Result<(PathBuf, bool)> {
     if apps.len() == 1 {
         return Ok((apps[0].rel.clone(), false));
     }
 
     let mut candidates = vec!["__shared__".to_string()];
     candidates.extend(apps.iter().map(|a| a.rel.to_string_lossy().to_string()));
+    let initial = initial_owner.map(|owner| owner.to_string_lossy().to_string());
 
-    let choice = prompt_searchable(
+    let choice = prompt_searchable_with_initial(
         &format!("Select {label} owner (or shared)"),
-        "type to search owners…",
         candidates,
+        initial.as_deref(),
     )?;
 
     if choice == "__shared__" {
@@ -406,39 +569,58 @@ fn prompt_select_owners(owners: &[PathBuf], label: &str) -> Result<PathBuf> {
     Ok(PathBuf::from(choice))
 }
 
-fn prompt_scope() -> Result<bool> {
-    let choice = select("Scope")
-        .item(
-            "private",
-            "Private (env.private.ts)",
-            "default, server-side only",
-        )
-        .item(
-            "public",
-            "Public (env.public.ts)",
-            "exposed to client, NEXT_PUBLIC_*",
-        )
-        .interact()?;
+fn prompt_scope(old_scope: Option<&Scope>) -> Result<bool> {
+    let private_label = old_marker(
+        "Private (env.private.ts)",
+        matches!(old_scope, Some(Scope::Private)),
+    );
+    let public_label = old_marker(
+        "Public (env.public.ts)",
+        matches!(old_scope, Some(Scope::Public)),
+    );
+    let mut prompt = select("Scope")
+        .item("private", private_label, "default, server-side only")
+        .item("public", public_label, "exposed to client, NEXT_PUBLIC_*");
+    if let Some(scope) = old_scope.and_then(scope_choice) {
+        prompt = prompt.initial_value(scope);
+    }
+    let choice = prompt.interact()?;
     Ok(choice == "public")
 }
 
 /// Returns (numeric, number, boolean, string, enum_values)
-fn prompt_type_bundle() -> Result<(bool, bool, bool, bool, Option<String>)> {
-    let choice = select("Type")
-        .item("string", "string", "z.string() — any text value")
-        .item("number", "number", "z.coerce.number() — parsed as a number")
+fn prompt_type_bundle(old_type: Option<&str>) -> Result<(bool, bool, bool, bool, Option<String>)> {
+    let initial = old_type.and_then(type_choice);
+    let mut prompt = select("Type")
+        .item(
+            "string",
+            type_marker("string", "string", initial, old_type),
+            "z.string() — any text value",
+        )
+        .item(
+            "number",
+            type_marker("number", "number", initial, old_type),
+            "z.coerce.number() — parsed as a number",
+        )
         .item(
             "numeric",
-            "numeric",
+            type_marker("numeric", "numeric", initial, old_type),
             "numeric string regex — string that looks like a number",
         )
-        .item("boolean", "boolean", "z.coerce.boolean() — true/false")
+        .item(
+            "boolean",
+            type_marker("boolean", "boolean", initial, old_type),
+            "z.coerce.boolean() — true/false",
+        )
         .item(
             "enum",
-            "enum",
+            type_marker("enum", "enum", initial, old_type),
             "z.enum([...]) — one of several allowed values",
-        )
-        .interact()?;
+        );
+    if let Some(initial) = initial {
+        prompt = prompt.initial_value(initial);
+    }
+    let choice = prompt.interact()?;
 
     match choice {
         "number" => Ok((false, true, false, false, None)),
@@ -461,10 +643,31 @@ fn prompt_type_bundle() -> Result<(bool, bool, bool, bool, Option<String>)> {
     }
 }
 
-fn prompt_example(placeholder: &str) -> Result<Option<String>> {
-    let value: String = input("Example value for .env.example")
-        .placeholder(placeholder)
-        .interact()?;
+fn prompt_example(placeholder: &str, old_value: Option<&str>) -> Result<Option<String>> {
+    let mut prompt = input("Example value for .env.example (optional)");
+    if let Some(old_value) = old_value {
+        prompt = prompt.default_input(old_value);
+    } else {
+        prompt = prompt.placeholder(placeholder).default_input("");
+    }
+    let value: String = prompt.required(false).interact()?;
+    if value.trim().is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(value))
+    }
+}
+
+fn prompt_description(old_value: Option<&str>) -> Result<Option<String>> {
+    let mut prompt = input("Description (optional)");
+    if let Some(old_value) = old_value {
+        prompt = prompt.default_input(old_value);
+    } else {
+        prompt = prompt
+            .placeholder("what this env var is used for")
+            .default_input("");
+    }
+    let value: String = prompt.required(false).interact()?;
     if value.trim().is_empty() {
         Ok(None)
     } else {

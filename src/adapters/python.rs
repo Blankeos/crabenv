@@ -108,6 +108,19 @@ pub fn upsert_schema(app: &Workspace, mutation: &VarMutation) -> Result<()> {
             mutation.variable
         )
     };
+    let field = match mutation.description.as_deref().map(str::trim) {
+        Some(description) if !description.is_empty() => {
+            let comments = description
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(|line| format!("    # {line}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!("{comments}\n{field}")
+        }
+        _ => field,
+    };
     if let Some(index) = contents.find("    model_config") {
         contents.insert_str(index, &field);
     } else {
@@ -122,11 +135,24 @@ pub fn remove_schema(app: &Workspace, variable: &str) -> Result<()> {
         return Ok(());
     };
     let contents = fs::read_to_string(&path)?;
-    let lines = contents
-        .lines()
-        .filter(|line| !line.contains(&format!("alias=\"{variable}\"")))
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
+    let original_lines = contents.lines().collect::<Vec<_>>();
+    let mut lines = Vec::new();
+    let mut index = 0;
+    while index < original_lines.len() {
+        if original_lines[index].contains(&format!("alias=\"{variable}\"")) {
+            while lines
+                .last()
+                .is_some_and(|line: &&str| line.trim_start().starts_with('#'))
+            {
+                lines.pop();
+            }
+            index += 1;
+            continue;
+        }
+
+        lines.push(original_lines[index]);
+        index += 1;
+    }
     fs::write(path, format!("{}\n", lines.join("\n")))?;
     Ok(())
 }

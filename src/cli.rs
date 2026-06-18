@@ -149,6 +149,13 @@ pub struct MutateArgs {
     )]
     pub example: Option<String>,
 
+    #[arg(
+        long,
+        value_name = "TEXT",
+        help = "Description to write as a schema comment"
+    )]
+    pub description: Option<String>,
+
     #[arg(long, help = "Mark the schema value as optional")]
     pub optional: bool,
 
@@ -197,6 +204,7 @@ impl From<&MutateArgs> for VarMutation {
     fn from(args: &MutateArgs) -> Self {
         Self {
             variable: args.variable.clone().unwrap_or_default(),
+            description: args.description.clone(),
             example: args.example.clone(),
             optional: args.optional,
             default_value: args.default_value.clone(),
