@@ -31,6 +31,7 @@ pub fn build_graph(project: &Project) -> Result<EnvGraph> {
             value_type: None,
             required: None,
             default_value: None,
+            description: None,
             example_value: None,
             local_present: false,
             surfaces: BTreeSet::new(),
@@ -49,6 +50,9 @@ pub fn build_graph(project: &Project) -> Result<EnvGraph> {
         }
         if source.default_value.is_some() {
             record.default_value = source.default_value.clone();
+        }
+        if source.description.is_some() {
+            record.description = source.description.clone();
         }
         if matches!(source.kind, SourceKind::EnvExample) {
             record.example_value = source.value.clone();

@@ -385,6 +385,7 @@ pub fn sources(path: &Path, owner: &Path, kind: SourceKind) -> Result<Vec<VarSou
                 value_type: None,
                 required: None,
                 default_value: None,
+                description: None,
                 value: Some(value),
                 path: path.to_path_buf(),
                 line: index + 1,

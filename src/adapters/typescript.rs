@@ -41,13 +41,8 @@ pub fn schema_sources(path: &Path, owner: &Path, scope: Scope) -> Result<Vec<Var
     };
 
     let mut out = Vec::new();
-    let body_without_comments = strip_comments(&block.body);
-    for entry in split_object_entries(&body_without_comments) {
-        let cleaned_entry = entry
-            .lines()
-            .filter(|line| !line.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n");
+    for entry in split_object_entries(&block.body) {
+        let cleaned_entry = strip_comments(&entry);
         let Some((name, expr)) = cleaned_entry.split_once(':') else {
             continue;
         };
@@ -57,6 +52,7 @@ pub fn schema_sources(path: &Path, owner: &Path, scope: Scope) -> Result<Vec<Var
         }
         let expr = expr.trim();
         let line = line_number_at(&contents, block.start + entry.find(name).unwrap_or(0));
+        let description = description_from_schema_entry(&entry);
         out.push(VarSource {
             name: name.to_string(),
             owner: owner.to_path_buf(),
@@ -65,6 +61,7 @@ pub fn schema_sources(path: &Path, owner: &Path, scope: Scope) -> Result<Vec<Var
             value_type: Some(infer_type(expr)),
             required: Some(!expr.contains(".optional()") && !expr.contains(".default(")),
             default_value: extract_default(expr),
+            description,
             value: None,
             path: path.to_path_buf(),
             line,
@@ -510,6 +507,80 @@ fn strip_comments(contents: &str) -> String {
     output
 }
 
+fn description_from_schema_entry(entry: &str) -> Option<String> {
+    let key_line_index = entry.lines().position(|line| entry_key(line).is_some())?;
+    let leading = entry.lines().take(key_line_index).collect::<Vec<_>>();
+    description_from_comment_lines(&leading)
+}
+
+fn description_from_comment_lines(lines: &[&str]) -> Option<String> {
+    let mut text = Vec::new();
+    let mut in_block = false;
+
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            if !text.is_empty() {
+                break;
+            }
+            continue;
+        }
+
+        if in_block {
+            if let Some(end) = trimmed.find("*/") {
+                let before_end = &trimmed[..end];
+                push_comment_text(&mut text, before_end);
+                in_block = false;
+                if !trimmed[end + 2..].trim().is_empty() {
+                    break;
+                }
+                continue;
+            }
+            push_comment_text(&mut text, trimmed);
+            continue;
+        }
+
+        if let Some(rest) = trimmed.strip_prefix("//") {
+            text.push(rest.trim().to_string());
+        } else if let Some(rest) = trimmed.strip_prefix("/**") {
+            if let Some(end) = rest.find("*/") {
+                push_comment_text(&mut text, &rest[..end]);
+            } else {
+                push_comment_text(&mut text, rest);
+                in_block = true;
+            }
+        } else if let Some(rest) = trimmed.strip_prefix("/*") {
+            if let Some(end) = rest.find("*/") {
+                push_comment_text(&mut text, &rest[..end]);
+            } else {
+                push_comment_text(&mut text, rest);
+                in_block = true;
+            }
+        } else {
+            break;
+        }
+    }
+
+    normalize_description_parts(text)
+}
+
+fn push_comment_text(parts: &mut Vec<String>, raw: &str) {
+    let cleaned = raw.trim().trim_start_matches('*').trim();
+    if !cleaned.is_empty() {
+        parts.push(cleaned.to_string());
+    }
+}
+
+fn normalize_description_parts(parts: Vec<String>) -> Option<String> {
+    let description = parts
+        .into_iter()
+        .map(|part| part.trim().to_string())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!description.is_empty()).then_some(description)
+}
+
 fn matching_brace(contents: &str, open: usize) -> Option<usize> {
     let mut depth = 0usize;
     let mut in_string: Option<char> = None;
@@ -762,7 +833,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn schema_sources_ignores_jsdoc_comments_before_entries() {
+    fn schema_sources_uses_comments_before_entries_as_descriptions() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("env.private.ts");
         fs::write(
@@ -803,6 +874,47 @@ export const privateEnv = createEnv({
         );
         assert_eq!(sources[0].required, Some(true));
         assert_eq!(sources[1].required, Some(false));
+        assert_eq!(sources[0].description.as_deref(), Some("Database URL."));
+        assert_eq!(
+            sources[1].description.as_deref(),
+            Some("Optional in development.")
+        );
+        assert_eq!(
+            sources[2].description.as_deref(),
+            Some("Regular line comments should still be ignored.")
+        );
+    }
+
+    #[test]
+    fn schema_sources_combines_multiline_comment_descriptions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("env.private.ts");
+        fs::write(
+            &path,
+            r#"
+import { createEnv } from "@t3-oss/env-core";
+import z from "zod";
+
+export const privateEnv = createEnv({
+  runtimeEnv: process.env,
+  server: {
+    /**
+     * API key used by the billing worker.
+     * Stored in the vendor dashboard.
+     */
+    BILLING_API_KEY: z.string(),
+  },
+});
+"#,
+        )
+        .unwrap();
+
+        let sources = schema_sources(&path, Path::new("."), Scope::Private).unwrap();
+
+        assert_eq!(
+            sources[0].description.as_deref(),
+            Some("API key used by the billing worker. Stored in the vendor dashboard.")
+        );
     }
 
     #[test]

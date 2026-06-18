@@ -6,6 +6,8 @@ use crate::models::{EnvRecord, EnvSurface, Scope};
 use crate::ordering::compare_env_names;
 use crate::util::{color, display_rel};
 
+const DESCRIPTION_WIDTH: usize = 48;
+
 pub fn render_list(graph: &EnvGraph) {
     let grouped = group_records_by_name(graph);
     let mut rows = grouped
@@ -21,6 +23,7 @@ pub fn render_list(graph: &EnvGraph) {
             scope: format_group_scope(records),
             value_type: format_group_type(records),
             surfaces: format_group_surfaces(records),
+            description: format_group_description(records),
         })
         .collect::<Vec<_>>();
 
@@ -40,35 +43,58 @@ pub fn render_list(graph: &EnvGraph) {
     println!("{} variable(s)", rows.len());
     println!();
     println!(
-        "{:<idx$}  {:<name$}  {:<owner$}  {:<scope$}  {:<type_width$}  surfaces",
+        "{:<idx$}  {:<name$}  {:<owner$}  {:<scope$}  {:<type_width$}  {:<surfaces$}  description",
         "#",
         "name",
         "owner",
         "scope",
         "type",
+        "surfaces",
         idx = widths.index,
         name = widths.name,
         owner = widths.owner,
         scope = widths.scope,
         type_width = widths.value_type,
+        surfaces = widths.surfaces,
     );
     println!("{}", "-".repeat(widths.total()));
 
     for row in rows {
+        let description_lines = wrap_cell(&row.description, widths.description);
         println!(
-            "{:<idx$}  {:<name$}  {:<owner$}  {:<scope$}  {:<type_width$}  {}",
+            "{:<idx$}  {:<name$}  {:<owner$}  {:<scope$}  {:<type_width$}  {:<surfaces$}  {}",
             row.index,
             row.name,
             row.owner,
             row.scope,
             row.value_type,
             row.surfaces,
+            description_lines.first().map(String::as_str).unwrap_or(""),
             idx = widths.index,
             name = widths.name,
             owner = widths.owner,
             scope = widths.scope,
             type_width = widths.value_type,
+            surfaces = widths.surfaces,
         );
+        for line in description_lines.iter().skip(1) {
+            println!(
+                "{:<idx$}  {:<name$}  {:<owner$}  {:<scope$}  {:<type_width$}  {:<surfaces$}  {}",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                line,
+                idx = widths.index,
+                name = widths.name,
+                owner = widths.owner,
+                scope = widths.scope,
+                type_width = widths.value_type,
+                surfaces = widths.surfaces,
+            );
+        }
     }
 }
 
@@ -247,6 +273,25 @@ fn format_group_surfaces(records: &[&EnvRecord]) -> String {
         .join(" ")
 }
 
+fn format_group_description(records: &[&EnvRecord]) -> String {
+    let descriptions = records
+        .iter()
+        .filter(|record| record_has_schema_surface(record))
+        .filter_map(|record| record.description.as_deref())
+        .map(str::trim)
+        .filter(|description| !description.is_empty())
+        .collect::<BTreeSet<_>>();
+
+    match descriptions.len() {
+        0 => "-".to_string(),
+        1 => descriptions.iter().next().unwrap().to_string(),
+        _ => format!(
+            "mixed: {}",
+            descriptions.into_iter().collect::<Vec<_>>().join(" / ")
+        ),
+    }
+}
+
 fn group_surfaces(records: &[&EnvRecord]) -> BTreeSet<EnvSurface> {
     records
         .iter()
@@ -294,6 +339,7 @@ struct ListRow {
     scope: String,
     value_type: String,
     surfaces: String,
+    description: String,
 }
 
 struct ListWidths {
@@ -303,6 +349,7 @@ struct ListWidths {
     scope: usize,
     value_type: usize,
     surfaces: usize,
+    description: usize,
 }
 
 impl ListWidths {
@@ -314,6 +361,7 @@ impl ListWidths {
             scope: "scope".len(),
             value_type: "type".len(),
             surfaces: "surfaces".len(),
+            description: "description".len(),
         };
 
         for row in rows {
@@ -323,18 +371,110 @@ impl ListWidths {
             widths.scope = widths.scope.max(row.scope.len());
             widths.value_type = widths.value_type.max(row.value_type.len());
             widths.surfaces = widths.surfaces.max(row.surfaces.len());
+            widths.description = widths
+                .description
+                .max(row.description.len().min(DESCRIPTION_WIDTH));
         }
 
         widths
     }
 
     fn total(&self) -> usize {
-        self.index + self.name + self.owner + self.scope + self.value_type + self.surfaces + 10
+        self.index
+            + self.name
+            + self.owner
+            + self.scope
+            + self.value_type
+            + self.surfaces
+            + self.description
+            + 12
     }
+}
+
+fn wrap_cell(value: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let value = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if value.is_empty() {
+        return vec![String::new()];
+    }
+
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in value.split(' ') {
+        let word_len = word.chars().count();
+        if word_len > width {
+            if !current.is_empty() {
+                lines.push(std::mem::take(&mut current));
+            }
+            lines.extend(split_long_word(word, width));
+            continue;
+        }
+
+        let current_len = current.chars().count();
+        if current.is_empty() {
+            current.push_str(word);
+        } else if current_len + 1 + word_len <= width {
+            current.push(' ');
+            current.push_str(word);
+        } else {
+            lines.push(std::mem::take(&mut current));
+            current.push_str(word);
+        }
+    }
+
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    if lines.is_empty() {
+        vec![String::new()]
+    } else {
+        lines
+    }
+}
+
+fn split_long_word(word: &str, width: usize) -> Vec<String> {
+    let chars = word.chars().collect::<Vec<_>>();
+    chars
+        .chunks(width)
+        .map(|chunk| chunk.iter().collect::<String>())
+        .collect()
 }
 
 struct DoctorInventoryRow {
     name: String,
     owner: String,
     surfaces: BTreeSet<EnvSurface>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wrap_cell_wraps_long_descriptions() {
+        assert_eq!(
+            wrap_cell(
+                "Local sqlite URL in development, managed database URL elsewhere.",
+                24
+            ),
+            vec![
+                "Local sqlite URL in".to_string(),
+                "development, managed".to_string(),
+                "database URL elsewhere.".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn wrap_cell_splits_unbroken_long_words() {
+        assert_eq!(
+            wrap_cell("abc supercalifragilistic", 8),
+            vec![
+                "abc".to_string(),
+                "supercal".to_string(),
+                "ifragili".to_string(),
+                "stic".to_string(),
+            ]
+        );
+    }
 }

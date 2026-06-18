@@ -18,12 +18,23 @@ pub fn schema_sources(path: &Path, owner: &Path) -> Result<Vec<VarSource>> {
     let alias_re = Regex::new(r#"alias\s*=\s*"([A-Z][A-Z0-9_]*)""#)?;
     let default_re = Regex::new(r#"default\s*=\s*([^,\)]+)"#)?;
     let mut out = Vec::new();
+    let mut pending_comments = Vec::<String>::new();
     for (index, line) in contents.lines().enumerate() {
         let Some(alias) = alias_re
             .captures(line)
             .and_then(|captures| captures.get(1))
             .map(|m| m.as_str().to_string())
         else {
+            let trimmed = line.trim_start();
+            if let Some(comment) = trimmed.strip_prefix('#') {
+                pending_comments.push(comment.trim().to_string());
+            } else if trimmed.is_empty() {
+                if !pending_comments.is_empty() {
+                    pending_comments.clear();
+                }
+            } else {
+                pending_comments.clear();
+            }
             continue;
         };
         let default_value = default_re
@@ -36,6 +47,7 @@ pub fn schema_sources(path: &Path, owner: &Path) -> Result<Vec<VarSource>> {
                     .trim_matches('\'')
                     .to_string()
             });
+        let description = normalize_python_description(&mut pending_comments);
         out.push(VarSource {
             name: alias,
             owner: owner.to_path_buf(),
@@ -44,12 +56,23 @@ pub fn schema_sources(path: &Path, owner: &Path) -> Result<Vec<VarSource>> {
             value_type: Some("string".to_string()),
             required: Some(default_value.is_none()),
             default_value,
+            description,
             value: None,
             path: path.to_path_buf(),
             line: index + 1,
         });
     }
     Ok(out)
+}
+
+fn normalize_python_description(pending_comments: &mut Vec<String>) -> Option<String> {
+    let parts = std::mem::take(pending_comments)
+        .into_iter()
+        .map(|part| part.trim().to_string())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    let description = parts.join(" ");
+    (!description.is_empty()).then_some(description)
 }
 
 pub fn find_env_file(root: &Path) -> Option<PathBuf> {
