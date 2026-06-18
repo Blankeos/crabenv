@@ -1,14 +1,15 @@
 The simplest, opinionated way to keep .env files, schemas, and examples aligned.
 
-crabenv is an opinionated, language-agnostic CLI that keeps your environment variables aligned across schema, template, and local files. No new config file required. It validates, copies, and checks for drift so your team doesn't have to.
+crabenv is an **opinionated**, language-agnostic CLI that keeps your environment variables aligned across schema, template, and local files. No new config file required. It validates, copies, and checks for drift so your team doesn't have to.
 
-This project will once and for all solve environment variables. This CLI only does what you can already do manually. So it doesn't introduce any new config files, if your team doesn't want to use crabenv. Completely fine too!
+This project will once and for all solve environment variables typesafe schema definition and documentation so it will never drift. This CLI only does what you can already do manually. So it doesn't introduce any new config files, if your team doesn't want to use crabenv. Completely fine too!
 
 📁 Languages supported:
 
 - [x] TypeScript/Javascript and Monorepos (includes React, Solid, Vue, Svelte, Vite, NextJS, ReactNative, Backends, and Cloudflare apps)
-- [x] Rust
-- [x] Flutter
+- [ ] Python
+- [ ] Rust
+- [ ] Flutter
 - [x] More? Request an adapter.
 
 🤒 Pains solved:
