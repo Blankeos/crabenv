@@ -1,5 +1,6 @@
-A language-agnostic, multi-project, 100% opinionated way to manage environment variables.
-These opinions make env var management simpler, which notoriously get a lot of drift at some point.
+The simplest, opinionated way to keep .env files, schemas, and examples aligned.
+
+crabenv is an opinionated, language-agnostic CLI that keeps your environment variables aligned across schema, template, and local files. No new config file required. It validates, copies, and checks for drift so your team doesn't have to.
 
 This project will once and for all solve environment variables. This CLI only does what you can already do manually. So it doesn't introduce any new config files, if your team doesn't want to use crabenv. Completely fine too!
 

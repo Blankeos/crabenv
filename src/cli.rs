@@ -5,9 +5,9 @@ use crate::models::VarMutation;
 
 #[derive(Parser)]
 #[command(name = "crabenv")]
-#[command(about = "Adapter-first environment variable management")]
+#[command(about = "The simplest, opinionated way to keep .env files, schemas, and examples aligned.")]
 #[command(
-    long_about = "crabenv manages environment variables across app owners without introducing a new config file.\n\nEnv config is synced across surfaces: schema files such as src/env.private.ts and src/env.public.ts, template files such as .env.example, and the local .env. Sinks are reserved for future explicit integrations, not inferred from arbitrary deployment files. In monorepos, app owners live at paths like apps/web and shared variables are derived when the same variable exists in multiple owners."
+    long_about = "crabenv is an opinionated, language-agnostic CLI that keeps your environment variables aligned across schema, template, and local files. No new config file required. It validates, copies, and checks for drift so your team doesn't have to."
 )]
 #[command(
     after_help = "Examples:\n  crabenv list\n  crabenv doctor\n  crabenv copy\n  crabenv add DATABASE_URL --owner apps/hono-api --example file:./local.db\n  crabenv add NEXT_PUBLIC_API_URL --owner apps/next-web --public --example http://localhost:8787\n  crabenv attach DATABASE_URL --from apps/hono-api --owner apps/next-web\n\nUse `crabenv <command> --help` for command-specific examples."

@@ -2,7 +2,7 @@
 name = "crabenv"
 version = "0.1.0"
 edition = "2021"
-description = "A language-agnostic, adapter-first CLI for environment variable management"
+description = "The simplest, opinionated way to keep .env files, schemas, and examples aligned."
 license = "MIT"
 repository = "https://github.com/blankeos/crabenv"
 homepage = "https://github.com/blankeos/crabenv"
