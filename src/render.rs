@@ -27,13 +27,7 @@ pub fn render_list(graph: &EnvGraph) {
         })
         .collect::<Vec<_>>();
 
-    rows.sort_by(|left, right| {
-        compare_env_names(&left.name, &right.name).then_with(|| {
-            list_owner_rank(&left.owner)
-                .cmp(&list_owner_rank(&right.owner))
-                .then_with(|| left.owner.cmp(&right.owner))
-        })
-    });
+    rows.sort_by(|left, right| compare_inventory_rows(&left.name, &left.owner, &right.name, &right.owner));
     for (index, row) in rows.iter_mut().enumerate() {
         row.index = (index + 1).to_string();
     }
@@ -112,13 +106,7 @@ pub fn render_doctor_inventory(graph: &EnvGraph) {
         })
         .collect::<Vec<_>>();
 
-    rows.sort_by(|left, right| {
-        compare_env_names(&left.name, &right.name).then_with(|| {
-            list_owner_rank(&left.owner)
-                .cmp(&list_owner_rank(&right.owner))
-                .then_with(|| left.owner.cmp(&right.owner))
-        })
-    });
+    rows.sort_by(|left, right| compare_inventory_rows(&left.name, &left.owner, &right.name, &right.owner));
     let show_owner = rows.iter().any(|row| row.owner != ".");
     let name_width = rows
         .iter()
@@ -178,6 +166,18 @@ fn list_owner_rank(owner: &str) -> u8 {
     } else {
         1
     }
+}
+
+fn compare_inventory_rows(
+    left_name: &str,
+    left_owner: &str,
+    right_name: &str,
+    right_owner: &str,
+) -> std::cmp::Ordering {
+    list_owner_rank(left_owner)
+        .cmp(&list_owner_rank(right_owner))
+        .then_with(|| compare_env_names(left_name, right_name))
+        .then_with(|| left_owner.cmp(right_owner))
 }
 
 fn group_has_definition_surface(records: &[&EnvRecord]) -> bool {
@@ -449,6 +449,7 @@ struct DoctorInventoryRow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cmp::Ordering;
 
     #[test]
     fn wrap_cell_wraps_long_descriptions() {
@@ -475,6 +476,26 @@ mod tests {
                 "ifragili".to_string(),
                 "stic".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn inventory_rows_sort_shared_owners_before_env_name_order() {
+        assert_eq!(
+            compare_inventory_rows("ZZZ_API_KEY", "shared(2)", "NODE_ENV", "apps/web"),
+            Ordering::Less
+        );
+    }
+
+    #[test]
+    fn inventory_rows_keep_env_name_order_within_owner_rank() {
+        assert_eq!(
+            compare_inventory_rows("S3_BUCKET", "apps/web", "NODE_ENV", "apps/api"),
+            Ordering::Greater
+        );
+        assert_eq!(
+            compare_inventory_rows("S3_BUCKET", "shared(2)", "RESEND_API_KEY", "shared(3)"),
+            Ordering::Greater
         );
     }
 }
