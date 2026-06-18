@@ -5,12 +5,14 @@ use crate::models::VarMutation;
 
 #[derive(Parser)]
 #[command(name = "crabenv")]
-#[command(about = "The simplest, opinionated way to keep .env files, schemas, and examples aligned.")]
+#[command(
+    about = "The simplest, opinionated way to keep .env files, schemas, and examples aligned."
+)]
 #[command(
     long_about = "crabenv is an opinionated, language-agnostic CLI that keeps your environment variables aligned across schema, template, and local files. No new config file required. It validates, copies, and checks for drift so your team doesn't have to."
 )]
 #[command(
-    after_help = "Examples:\n  crabenv list\n  crabenv doctor\n  crabenv copy\n  crabenv add DATABASE_URL --owner apps/hono-api --example file:./local.db\n  crabenv add NEXT_PUBLIC_API_URL --owner apps/next-web --public --example http://localhost:8787\n  crabenv attach DATABASE_URL --from apps/hono-api --owner apps/next-web\n\nUse `crabenv <command> --help` for command-specific examples."
+    after_help = "Examples:\n  crabenv list\n  crabenv doctor\n  crabenv format\n  crabenv copy\n  crabenv add DATABASE_URL --owner apps/hono-api --example file:./local.db\n  crabenv add NEXT_PUBLIC_API_URL --owner apps/next-web --public --example http://localhost:8787\n  crabenv attach DATABASE_URL --from apps/hono-api --owner apps/next-web\n\nUse `crabenv <command> --help` for command-specific examples."
 )]
 pub struct Cli {
     #[arg(
@@ -43,6 +45,12 @@ pub enum Commands {
         long_about = "Check schema/template drift, missing required local values, monorepo .env placement, and public runtimeEnvStrict mappings. Also prints a full per-variable surfaces checklist including local-only variables."
     )]
     Doctor(DoctorArgs),
+    #[command(
+        visible_alias = "fmt",
+        about = "Sort and group env files and schema entries",
+        long_about = "Sort and group .env, .env.example, env.private.ts, and env.public.ts entries with crabenv's deterministic env ordering. Comments, section headers, placeholders, and raw values are preserved."
+    )]
+    Format(FormatArgs),
     #[command(
         visible_alias = "cp",
         about = "Create or update local env files from examples",
@@ -92,6 +100,12 @@ pub struct DoctorArgs {
     pub fix: bool,
     #[arg(long, help = "Apply fixes instead of only printing the fix plan")]
     pub yes: bool,
+}
+
+#[derive(Args, Clone)]
+pub struct FormatArgs {
+    #[arg(long, help = "Print files that would change without writing them")]
+    pub check: bool,
 }
 
 #[derive(Args, Clone)]

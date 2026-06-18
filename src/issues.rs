@@ -8,6 +8,7 @@ use crate::adapters::{dotenv, typescript};
 use crate::discovery::app_workspaces;
 use crate::graph::EnvGraph;
 use crate::models::{EnvSurface, Fix, Issue, Project, Severity, WorkspaceKind};
+use crate::ordering::{compare_env_names, sort_env_names};
 use crate::util::display_rel;
 
 pub fn collect_issues(project: &Project, graph: &EnvGraph) -> Result<Vec<Issue>> {
@@ -59,7 +60,12 @@ pub fn collect_issues(project: &Project, graph: &EnvGraph) -> Result<Vec<Issue>>
         let schema_vars = workspace_schema_vars(&workspace.rel, graph);
         let example_vars = dotenv::key_set(&dotenv::example_path(workspace))?;
 
-        for name in schema_vars.difference(&example_vars) {
+        let mut missing_template = schema_vars
+            .difference(&example_vars)
+            .cloned()
+            .collect::<Vec<_>>();
+        sort_env_names(&mut missing_template);
+        for name in missing_template {
             issues.push(Issue {
                 severity: Severity::Warn,
                 message: format!(
@@ -69,12 +75,17 @@ pub fn collect_issues(project: &Project, graph: &EnvGraph) -> Result<Vec<Issue>>
                 ),
                 fix: Some(Fix::BackfillExample {
                     app: workspace.rel.clone(),
-                    name: name.clone(),
+                    name,
                 }),
             });
         }
 
-        for name in example_vars.difference(&schema_vars) {
+        let mut missing_schema = example_vars
+            .difference(&schema_vars)
+            .cloned()
+            .collect::<Vec<_>>();
+        sort_env_names(&mut missing_schema);
+        for name in missing_schema {
             issues.push(Issue {
                 severity: Severity::Warn,
                 message: format!(
@@ -108,7 +119,12 @@ pub fn collect_issues(project: &Project, graph: &EnvGraph) -> Result<Vec<Issue>>
         }
     }
 
-    for record in graph.values() {
+    let mut records = graph.values().collect::<Vec<_>>();
+    records.sort_by(|left, right| {
+        compare_env_names(&left.name, &right.name).then_with(|| left.owner.cmp(&right.owner))
+    });
+
+    for record in &records {
         if record.example_value.is_some() && record.required == Some(true) && !record.local_present
         {
             issues.push(Issue {
@@ -124,7 +140,7 @@ pub fn collect_issues(project: &Project, graph: &EnvGraph) -> Result<Vec<Issue>>
         }
     }
 
-    for record in graph.values() {
+    for record in records {
         let has_definition_surface = record.surfaces.contains(&EnvSurface::Schema)
             || record.surfaces.contains(&EnvSurface::Template);
         let matched_elsewhere = graph.values().any(|other| {

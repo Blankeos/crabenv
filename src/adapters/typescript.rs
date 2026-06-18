@@ -114,6 +114,19 @@ pub fn check_public_runtime_strict(
     Ok(())
 }
 
+pub fn format_schema_contents(contents: &str, scope: &Scope) -> Result<String> {
+    let mut contents = contents.to_string();
+    match scope {
+        Scope::Private => format_object_entries(&mut contents, "server")?,
+        Scope::Public => {
+            format_object_entries(&mut contents, "client")?;
+            format_object_entries(&mut contents, "runtimeEnvStrict")?;
+        }
+        Scope::Unknown => {}
+    }
+    Ok(contents)
+}
+
 pub fn upsert_schema(app: &Workspace, mutation: &VarMutation, scope: &Scope) -> Result<()> {
     let path = match scope {
         Scope::Public => public_schema_path(app),
@@ -341,6 +354,107 @@ fn remove_object_entry(contents: &mut String, label: &str, variable: &str) -> Re
     }
     contents.replace_range(block.start..block.end, &new_body.join("\n"));
     Ok(())
+}
+
+fn format_object_entries(contents: &mut String, label: &str) -> Result<()> {
+    let Some(block) = extract_object_block(contents, label) else {
+        return Ok(());
+    };
+    let entries = split_object_entries(&block.body);
+    if entries.is_empty() {
+        return Ok(());
+    }
+
+    let mut sortable = Vec::new();
+    let mut loose = Vec::new();
+    for (index, entry) in entries.into_iter().enumerate() {
+        if let Some(key) = entry_key(&entry) {
+            sortable.push(SchemaEntry { key, entry, index });
+        } else {
+            loose.push(entry);
+        }
+    }
+
+    sortable.sort_by(|left, right| {
+        crate::ordering::compare_env_names(&left.key, &right.key)
+            .then_with(|| left.index.cmp(&right.index))
+    });
+
+    let mut body_lines = Vec::new();
+    for entry in loose {
+        push_schema_entry(&mut body_lines, &entry, false);
+    }
+
+    let mut previous_group: Option<String> = None;
+    for entry in sortable {
+        let group = crate::ordering::env_group(&entry.key);
+        if previous_group
+            .as_ref()
+            .is_some_and(|previous| previous != &group)
+            && !body_lines.is_empty()
+            && !body_lines.last().is_some_and(|line| line.is_empty())
+        {
+            body_lines.push(String::new());
+        }
+        push_schema_entry(&mut body_lines, &entry.entry, true);
+        previous_group = Some(group);
+    }
+
+    let new_body = if body_lines.is_empty() {
+        String::new()
+    } else {
+        format!("\n{}\n  ", body_lines.join("\n").trim_end())
+    };
+    contents.replace_range(block.start..block.end, &new_body);
+    Ok(())
+}
+
+#[derive(Debug)]
+struct SchemaEntry {
+    key: String,
+    entry: String,
+    index: usize,
+}
+
+fn entry_key(entry: &str) -> Option<String> {
+    let without_comments = strip_comments(entry);
+    let (name, _) = without_comments.split_once(':')?;
+    let name = name.trim().trim_matches('"').trim_matches('\'');
+    is_valid_var_name(name).then(|| name.to_string())
+}
+
+fn push_schema_entry(output: &mut Vec<String>, entry: &str, ensure_comma: bool) {
+    let start = output.len();
+    for line in normalize_schema_entry(entry) {
+        output.push(format!("    {line}"));
+    }
+
+    if ensure_comma {
+        if let Some(last) = output[start..]
+            .iter_mut()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+        {
+            if !last.trim_end().ends_with(',') {
+                last.push(',');
+            }
+        }
+    }
+}
+
+fn normalize_schema_entry(entry: &str) -> Vec<String> {
+    entry
+        .trim()
+        .lines()
+        .enumerate()
+        .map(|(index, line)| {
+            if index == 0 {
+                line.trim_start().to_string()
+            } else {
+                line.strip_prefix("    ").unwrap_or(line).to_string()
+            }
+        })
+        .collect()
 }
 
 fn strip_comments(contents: &str) -> String {
@@ -637,5 +751,37 @@ export const privateEnv = createEnv({
         );
         assert_eq!(sources[0].required, Some(true));
         assert_eq!(sources[1].required, Some(false));
+    }
+
+    #[test]
+    fn format_schema_contents_sorts_entries_and_keeps_comments() {
+        let contents = r#"import { createEnv } from "@t3-oss/env-core";
+import { z } from "zod";
+
+export const privateEnv = createEnv({
+  runtimeEnv: process.env,
+  server: {
+    RESEND_FROM: z.string(),
+    /** S3 bucket. */
+    S3_BUCKET_NAME: z.string(),
+    NODE_ENV: z.enum(["development", "production"]).default("development"),
+    RESEND_API_KEY: z.string(),
+  },
+});
+"#;
+
+        let formatted = format_schema_contents(contents, &Scope::Private).unwrap();
+
+        assert!(formatted.contains(
+            r#"  server: {
+    NODE_ENV: z.enum(["development", "production"]).default("development"),
+
+    RESEND_API_KEY: z.string(),
+    RESEND_FROM: z.string(),
+
+    /** S3 bucket. */
+    S3_BUCKET_NAME: z.string(),
+  },"#
+        ));
     }
 }

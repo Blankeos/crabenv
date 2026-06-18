@@ -13,6 +13,7 @@ use crate::cli::{AttachArgs, MutateArgs, RemoveArgs};
 use crate::discovery::app_workspaces;
 use crate::graph::{build_graph, EnvGraph};
 use crate::models::{EnvSurface, Project, Scope, Workspace};
+use crate::ordering::sort_env_names;
 use crate::util::{display_rel, is_valid_var_name};
 
 // ---------------------------------------------------------------------------
@@ -86,10 +87,7 @@ pub fn prompt_add_or_update(project: &Project, update: bool) -> Result<MutateArg
     } else {
         owner.to_string_lossy().to_string()
     };
-    let yes = confirm(format!(
-        "{action} {variable} in {owner_str} ({scope_str})?"
-    ))
-    .interact()?;
+    let yes = confirm(format!("{action} {variable} in {owner_str} ({scope_str})?")).interact()?;
 
     if !yes {
         outro_cancel("Cancelled.")?;
@@ -143,13 +141,12 @@ pub fn prompt_attach(project: &Project) -> Result<AttachArgs> {
         )?;
         // Map the display label back to the PathBuf
         let idx = labels.iter().position(|l| l == &choice);
-        idx.and_then(|i| candidates.get(i).cloned())
-            .or_else(|| {
-                candidates
-                    .iter()
-                    .find(|c| display_rel(c) == choice)
-                    .cloned()
-            })
+        idx.and_then(|i| candidates.get(i).cloned()).or_else(|| {
+            candidates
+                .iter()
+                .find(|c| display_rel(c) == choice)
+                .cloned()
+        })
     } else {
         candidates.first().cloned()
     };
@@ -173,10 +170,7 @@ pub fn prompt_attach(project: &Project) -> Result<AttachArgs> {
         prompt_select_owner(&target_apps, "target")?
     };
 
-    let from_display = from
-        .as_ref()
-        .map(|f| display_rel(f))
-        .unwrap_or_default();
+    let from_display = from.as_ref().map(|f| display_rel(f)).unwrap_or_default();
     let yes = confirm(format!(
         "Attach {} from {} to {}?",
         variable.cyan(),
@@ -255,7 +249,9 @@ pub fn prompt_remove(project: &Project) -> Result<RemoveArgs> {
         let scopes = candidates
             .iter()
             .filter(|r| {
-                owner.as_ref().is_none_or(|o| r.owner == crate::util::normalize_rel_display(o))
+                owner
+                    .as_ref()
+                    .is_none_or(|o| r.owner == crate::util::normalize_rel_display(o))
             })
             .map(|r| &r.scope)
             .collect::<Vec<_>>();
@@ -314,11 +310,7 @@ fn collect_apps(project: &Project) -> Vec<&Workspace> {
 ///
 /// Options are visible immediately, typing fuzzy-filters the list, and the
 /// cursor wraps in both directions via our local cliclack patch.
-fn prompt_searchable(
-    message: &str,
-    _placeholder: &str,
-    candidates: Vec<String>,
-) -> Result<String> {
+fn prompt_searchable(message: &str, _placeholder: &str, candidates: Vec<String>) -> Result<String> {
     if candidates.len() == 1 {
         return Ok(candidates.into_iter().next().unwrap());
     }
@@ -358,17 +350,13 @@ fn prompt_existing_var(graph: &EnvGraph) -> Result<String> {
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect();
-    names.sort();
+    sort_env_names(&mut names);
 
     if names.is_empty() {
         bail!("no env vars found in any schema or template");
     }
 
-    prompt_searchable(
-        "Select a variable",
-        "type to search…",
-        names,
-    )
+    prompt_searchable("Select a variable", "type to search…", names)
 }
 
 fn prompt_owner(apps: &[&Workspace], label: &str) -> Result<(PathBuf, bool)> {
@@ -393,7 +381,10 @@ fn prompt_owner(apps: &[&Workspace], label: &str) -> Result<(PathBuf, bool)> {
 }
 
 fn prompt_select_owner(apps: &[&Workspace], label: &str) -> Result<PathBuf> {
-    let candidates: Vec<String> = apps.iter().map(|a| a.rel.to_string_lossy().to_string()).collect();
+    let candidates: Vec<String> = apps
+        .iter()
+        .map(|a| a.rel.to_string_lossy().to_string())
+        .collect();
     let choice = prompt_searchable(
         &format!("Select {label} owner"),
         "type to search owners…",
@@ -403,7 +394,10 @@ fn prompt_select_owner(apps: &[&Workspace], label: &str) -> Result<PathBuf> {
 }
 
 fn prompt_select_owners(owners: &[PathBuf], label: &str) -> Result<PathBuf> {
-    let candidates: Vec<String> = owners.iter().map(|o| o.to_string_lossy().to_string()).collect();
+    let candidates: Vec<String> = owners
+        .iter()
+        .map(|o| o.to_string_lossy().to_string())
+        .collect();
     let choice = prompt_searchable(
         &format!("Select owner to {label}"),
         "type to search owners…",
@@ -414,8 +408,16 @@ fn prompt_select_owners(owners: &[PathBuf], label: &str) -> Result<PathBuf> {
 
 fn prompt_scope() -> Result<bool> {
     let choice = select("Scope")
-        .item("private", "Private (env.private.ts)", "default, server-side only")
-        .item("public", "Public (env.public.ts)", "exposed to client, NEXT_PUBLIC_*")
+        .item(
+            "private",
+            "Private (env.private.ts)",
+            "default, server-side only",
+        )
+        .item(
+            "public",
+            "Public (env.public.ts)",
+            "exposed to client, NEXT_PUBLIC_*",
+        )
         .interact()?;
     Ok(choice == "public")
 }

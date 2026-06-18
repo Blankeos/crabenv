@@ -7,6 +7,7 @@ use crate::adapters::dotenv;
 use crate::discovery::app_workspaces;
 use crate::graph::collect_sources;
 use crate::models::{CopyPlan, DotenvEntry, FileWritePlan, Project, SourceKind};
+use crate::ordering::{compare_env_names, env_group};
 use crate::util::display_rel;
 
 pub fn build_copy_plan(
@@ -79,16 +80,17 @@ fn render_env_contents(
     let mut output = Vec::new();
 
     if project.is_monorepo && !shared_names.is_empty() {
-        let mut shared_lines = Vec::new();
+        let mut shared_entries = Vec::new();
         let mut seen_shared = BTreeSet::new();
         for section in sections {
             for entry in &section.entries {
                 if !shared_names.contains(&entry.key) || !seen_shared.insert(entry.key.clone()) {
                     continue;
                 }
-                shared_lines.push(render_entry(entry));
+                shared_entries.push(entry);
             }
         }
+        let shared_lines = render_sorted_entries(shared_entries, &mut render_entry);
 
         if !shared_lines.is_empty() {
             output.push("# ---- shared ----".to_string());
@@ -99,14 +101,15 @@ fn render_env_contents(
 
     let mut seen = BTreeSet::new();
     for section in sections {
-        let mut section_lines = Vec::new();
+        let mut section_entries = Vec::new();
         for entry in &section.entries {
             if shared_names.contains(&entry.key) || seen.contains(&entry.key) {
                 continue;
             }
             seen.insert(entry.key.clone());
-            section_lines.push(render_entry(entry));
+            section_entries.push(entry);
         }
+        let section_lines = render_sorted_entries(section_entries, &mut render_entry);
 
         if section_lines.is_empty() {
             continue;
@@ -122,6 +125,28 @@ fn render_env_contents(
     }
 
     format!("{}\n", output.join("\n").trim_end())
+}
+
+fn render_sorted_entries(
+    mut entries: Vec<&DotenvEntry>,
+    render_entry: &mut impl FnMut(&DotenvEntry) -> String,
+) -> Vec<String> {
+    entries.sort_by(|left, right| compare_env_names(&left.key, &right.key));
+
+    let mut lines = Vec::new();
+    let mut previous_group: Option<String> = None;
+    for entry in entries {
+        let group = env_group(&entry.key);
+        if previous_group
+            .as_ref()
+            .is_some_and(|previous| previous != &group)
+        {
+            lines.push(String::new());
+        }
+        lines.push(render_entry(entry));
+        previous_group = Some(group);
+    }
+    lines
 }
 
 fn shared_schema_names(project: &Project) -> Result<BTreeSet<String>> {

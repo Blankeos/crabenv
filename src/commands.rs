@@ -1,14 +1,17 @@
 use anyhow::{anyhow, bail, Context, Result};
+use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::adapters::{dotenv, python, typescript};
-use crate::cli::{AttachArgs, CopyArgs, DoctorArgs, InitArgs, MutateArgs, RemoveArgs};
+use crate::cli::{AttachArgs, CopyArgs, DoctorArgs, FormatArgs, InitArgs, MutateArgs, RemoveArgs};
 use crate::copy_plan::{build_copy_plan, build_root_example_plan};
 use crate::discovery::app_workspaces;
 use crate::graph::{build_graph, EnvGraph};
 use crate::issues::collect_issues;
-use crate::models::{EnvRecord, EnvSurface, Fix, Project, Scope, Severity, VarMutation};
+use crate::models::{
+    EnvRecord, EnvSurface, FileWritePlan, Fix, Project, Scope, Severity, VarMutation,
+};
 use crate::render::{render_doctor_inventory, render_list};
 use crate::util::{color, display_rel, normalize_rel_display, validate_var_name};
 
@@ -122,6 +125,36 @@ pub fn run_doctor(project: &Project, args: DoctorArgs) -> Result<()> {
     Ok(())
 }
 
+pub fn run_format(project: &Project, args: FormatArgs) -> Result<()> {
+    let writes = build_format_plan(project)?;
+    if writes.is_empty() {
+        println!("crabenv format: already formatted");
+        return Ok(());
+    }
+
+    if args.check {
+        println!("crabenv format: {} file(s) would change", writes.len());
+        for write in &writes {
+            println!(
+                "would format {}",
+                display_rel(&display_path_from_root(project, &write.path))
+            );
+        }
+        return Ok(());
+    }
+
+    for write in &writes {
+        fs::write(&write.path, &write.contents)
+            .with_context(|| format!("failed to write {}", write.path.display()))?;
+        println!(
+            "formatted {}",
+            display_rel(&display_path_from_root(project, &write.path))
+        );
+    }
+    println!("crabenv format: formatted {} file(s)", writes.len());
+    Ok(())
+}
+
 fn severity_label(severity: &Severity) -> String {
     let label = format!("[{}]", severity.as_str());
     match severity {
@@ -129,6 +162,72 @@ fn severity_label(severity: &Severity) -> String {
         Severity::Warn => color(label, "33"),
         Severity::Error => color(label, "31"),
     }
+}
+
+fn build_format_plan(project: &Project) -> Result<Vec<FileWritePlan>> {
+    let mut paths = BTreeSet::<PathBuf>::new();
+
+    let root_env = project.root.join(".env");
+    if root_env.exists() {
+        paths.insert(root_env);
+    }
+    let root_example = project.root.join(".env.example");
+    if root_example.exists() {
+        paths.insert(root_example);
+    }
+
+    for app in app_workspaces(project) {
+        let example = dotenv::example_path(app);
+        if example.exists() {
+            paths.insert(example);
+        }
+        if !project.is_monorepo {
+            let local = dotenv::local_path(project, app);
+            if local.exists() {
+                paths.insert(local);
+            }
+        }
+        let private_schema = typescript::private_schema_path(app);
+        if private_schema.exists() {
+            paths.insert(private_schema);
+        }
+        let public_schema = typescript::public_schema_path(app);
+        if public_schema.exists() {
+            paths.insert(public_schema);
+        }
+    }
+
+    let mut writes = Vec::new();
+    for path in paths {
+        let contents = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        let formatted = if is_typescript_schema(&path, "env.private.ts") {
+            typescript::format_schema_contents(&contents, &Scope::Private)?
+        } else if is_typescript_schema(&path, "env.public.ts") {
+            typescript::format_schema_contents(&contents, &Scope::Public)?
+        } else {
+            dotenv::format_contents(&contents)
+        };
+
+        if formatted != contents {
+            writes.push(FileWritePlan {
+                path,
+                contents: formatted,
+            });
+        }
+    }
+
+    Ok(writes)
+}
+
+fn is_typescript_schema(path: &Path, file_name: &str) -> bool {
+    path.file_name().and_then(|name| name.to_str()) == Some(file_name)
+}
+
+fn display_path_from_root(project: &Project, path: &Path) -> PathBuf {
+    path.strip_prefix(&project.root)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|_| path.to_path_buf())
 }
 
 pub fn run_copy(project: &Project, args: CopyArgs) -> Result<()> {
@@ -201,11 +300,7 @@ pub fn run_add_or_update(project: &Project, args: MutateArgs, update: bool) -> R
         }
     }
 
-    print_mutation_result(
-        if update { "updated" } else { "added" },
-        variable,
-        &apps,
-    );
+    print_mutation_result(if update { "updated" } else { "added" }, variable, &apps);
 
     if update {
         sync_root_example(project)?;

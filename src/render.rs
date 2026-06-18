@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use crate::graph::EnvGraph;
 use crate::models::{EnvRecord, EnvSurface, Scope};
+use crate::ordering::compare_env_names;
 use crate::util::{color, display_rel};
 
 pub fn render_list(graph: &EnvGraph) {
@@ -24,10 +25,11 @@ pub fn render_list(graph: &EnvGraph) {
         .collect::<Vec<_>>();
 
     rows.sort_by(|left, right| {
-        list_owner_rank(&left.owner)
-            .cmp(&list_owner_rank(&right.owner))
-            .then_with(|| left.owner.cmp(&right.owner))
-            .then_with(|| left.name.cmp(&right.name))
+        compare_env_names(&left.name, &right.name).then_with(|| {
+            list_owner_rank(&left.owner)
+                .cmp(&list_owner_rank(&right.owner))
+                .then_with(|| left.owner.cmp(&right.owner))
+        })
     });
     for (index, row) in rows.iter_mut().enumerate() {
         row.index = (index + 1).to_string();
@@ -85,10 +87,11 @@ pub fn render_doctor_inventory(graph: &EnvGraph) {
         .collect::<Vec<_>>();
 
     rows.sort_by(|left, right| {
-        list_owner_rank(&left.owner)
-            .cmp(&list_owner_rank(&right.owner))
-            .then_with(|| left.owner.cmp(&right.owner))
-            .then_with(|| left.name.cmp(&right.name))
+        compare_env_names(&left.name, &right.name).then_with(|| {
+            list_owner_rank(&left.owner)
+                .cmp(&list_owner_rank(&right.owner))
+                .then_with(|| left.owner.cmp(&right.owner))
+        })
     });
     let show_owner = rows.iter().any(|row| row.owner != ".");
     let name_width = rows

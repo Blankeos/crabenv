@@ -1,4 +1,4 @@
-- [ ] a crabenv format (alias fmt), that automatically sorts everything well...
+- [x] a crabenv format (alias fmt), that automatically sorts everything well...
   - Rules:
     - Group by proper prefixes i.e. `S3_*` and `RESEND_*` grouped together well.
     - The env example usual groupings for `# --- apps/something ---` is important as well.
@@ -6,3 +6,5 @@
     - Preserve comments
     - Preserve placeholder variables
   - The very core of this feature is also "sorting" so it might also make sense to standardize this sorting rule so that for displaying commands like "list/ls/doctor" or the select options when doing `crabenv add/delete/update`, they're shown properly
+
+- [ ] a descriptioon system for env vars.. The rule we currently have is that they're stored in the schema files as comments just above the env var definition. What do you think about this? is it good?
