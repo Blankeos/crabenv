@@ -513,9 +513,27 @@ fn strip_comments(contents: &str) -> String {
 fn matching_brace(contents: &str, open: usize) -> Option<usize> {
     let mut depth = 0usize;
     let mut in_string: Option<char> = None;
+    let mut in_line_comment = false;
+    let mut in_block_comment = false;
     let mut escaped = false;
 
-    for (offset, ch) in contents[open..].char_indices() {
+    let mut chars = contents[open..].char_indices().peekable();
+    while let Some((offset, ch)) = chars.next() {
+        if in_line_comment {
+            if ch == '\n' {
+                in_line_comment = false;
+            }
+            continue;
+        }
+
+        if in_block_comment {
+            if ch == '*' && chars.peek().is_some_and(|(_, next)| *next == '/') {
+                chars.next();
+                in_block_comment = false;
+            }
+            continue;
+        }
+
         if let Some(quote) = in_string {
             if escaped {
                 escaped = false;
@@ -529,6 +547,14 @@ fn matching_brace(contents: &str, open: usize) -> Option<usize> {
 
         match ch {
             '"' | '\'' | '`' => in_string = Some(ch),
+            '/' if chars.peek().is_some_and(|(_, next)| *next == '/') => {
+                chars.next();
+                in_line_comment = true;
+            }
+            '/' if chars.peek().is_some_and(|(_, next)| *next == '*') => {
+                chars.next();
+                in_block_comment = true;
+            }
             '{' => depth += 1,
             '}' => {
                 depth = depth.saturating_sub(1);
@@ -549,9 +575,27 @@ fn split_object_entries(body: &str) -> Vec<String> {
     let mut square = 0usize;
     let mut paren = 0usize;
     let mut in_string: Option<char> = None;
+    let mut in_line_comment = false;
+    let mut in_block_comment = false;
     let mut escaped = false;
 
-    for (idx, ch) in body.char_indices() {
+    let mut chars = body.char_indices().peekable();
+    while let Some((idx, ch)) = chars.next() {
+        if in_line_comment {
+            if ch == '\n' {
+                in_line_comment = false;
+            }
+            continue;
+        }
+
+        if in_block_comment {
+            if ch == '*' && chars.peek().is_some_and(|(_, next)| *next == '/') {
+                chars.next();
+                in_block_comment = false;
+            }
+            continue;
+        }
+
         if let Some(quote) = in_string {
             if escaped {
                 escaped = false;
@@ -565,6 +609,14 @@ fn split_object_entries(body: &str) -> Vec<String> {
 
         match ch {
             '"' | '\'' | '`' => in_string = Some(ch),
+            '/' if chars.peek().is_some_and(|(_, next)| *next == '/') => {
+                chars.next();
+                in_line_comment = true;
+            }
+            '/' if chars.peek().is_some_and(|(_, next)| *next == '*') => {
+                chars.next();
+                in_block_comment = true;
+            }
             '{' => curly += 1,
             '}' => curly = curly.saturating_sub(1),
             '[' => square += 1,
@@ -783,5 +835,29 @@ export const privateEnv = createEnv({
     S3_BUCKET_NAME: z.string(),
   },"#
         ));
+    }
+
+    #[test]
+    fn format_schema_contents_does_not_split_commas_inside_line_comments() {
+        let contents = r#"import { createEnv } from "@t3-oss/env-core";
+import { z } from "zod";
+
+export const privateEnv = createEnv({
+  runtimeEnv: process.env,
+  server: {
+    // Local sqlite URL in development, managed database URL elsewhere.
+    DATABASE_URL: z.string(),
+    NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  },
+});
+"#;
+
+        let formatted = format_schema_contents(contents, &Scope::Private).unwrap();
+
+        assert!(formatted.contains(
+            r#"    // Local sqlite URL in development, managed database URL elsewhere.
+    DATABASE_URL: z.string(),"#
+        ));
+        assert!(!formatted.contains("\n    managed database URL elsewhere."));
     }
 }
