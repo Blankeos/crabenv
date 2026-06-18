@@ -110,7 +110,7 @@ pub fn prompt_add_or_update(project: &Project, update: bool) -> Result<MutateArg
         } else {
             prompt = prompt.placeholder("optional default");
         }
-        let val: String = prompt.interact()?;
+        let val: String = prompt.required(false).interact()?;
         if val.trim().is_empty() {
             None
         } else {
