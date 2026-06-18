@@ -1,3 +1,5 @@
+# crabenv
+
 The simplest, opinionated way to keep .env files, schemas, and examples aligned.
 
 crabenv is an **opinionated**, language-agnostic CLI that keeps your environment variables aligned across schema, template, and local files. No new config file required. It validates, copies, and checks for drift so your team doesn't have to.
@@ -15,7 +17,7 @@ cargo install crabenv             # or cargo (build from source)
 curl -sSL https://raw.githubusercontent.com/Blankeos/crabenv/main/install.sh | sh # or linux/macos (via curl)
 ```
 
-📁 Languages supported:
+### 📁 Languages supported:
 
 - [x] TypeScript/Javascript and Monorepos (includes React, Solid, Vue, Svelte, Vite, NextJS, ReactNative, Backends, and Cloudflare apps)
 - [x] Python
@@ -23,7 +25,7 @@ curl -sSL https://raw.githubusercontent.com/Blankeos/crabenv/main/install.sh | s
 - [x] Flutter
 - [x] More? Request an adapter.
 
-🤒 Pains solved:
+### 🤒 Pains solved:
 
 - [x] CRUD and Documentation drift
 - [ ] Deployment/sink drift via explicit managed blocks, not arbitrary file inference
@@ -46,6 +48,16 @@ curl -sSL https://raw.githubusercontent.com/Blankeos/crabenv/main/install.sh | s
   - 4. **Sinks** - Reserved for future explicit integrations. crabenv does not currently infer or rewrite arbitrary deployment files.
   - More? Make an adapter
 - Packages in monorepos don't have .env.
+
+## Agent skill
+
+Install the crabenv skill for coding agents with:
+
+```sh
+npx skills add blankeos/crabenv
+```
+
+This installs the `crabenv` agent skill from `skills/crabenv`, including language-specific references for TypeScript/JavaScript, Python, Rust, and Flutter/Dart.
 
 ## Usage
 
