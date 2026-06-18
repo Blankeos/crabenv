@@ -5,9 +5,9 @@ export const privateEnv = createEnv({
   emptyStringAsUndefined: true,
   runtimeEnv: process.env,
   server: {
-    WORKER_WEBHOOK_SECRET: z.string().min(32),
     WORKER_KV_NAMESPACE: z.string(),
     WORKER_LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
+    WORKER_WEBHOOK_SECRET: z.string().min(32),
   },
 });
 
