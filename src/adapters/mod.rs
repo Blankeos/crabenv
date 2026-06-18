@@ -4,11 +4,22 @@ use crate::models::{Project, VarSource, Workspace};
 
 pub mod dotenv;
 pub mod python;
+pub mod rust;
 pub mod typescript;
 
 pub trait WorkspaceAdapter {
     fn name(&self) -> &'static str;
     fn collect(&self, project: &Project, workspace: &Workspace) -> Result<Vec<VarSource>>;
+}
+
+impl WorkspaceAdapter for RustAdapter {
+    fn name(&self) -> &'static str {
+        "rust"
+    }
+
+    fn collect(&self, _project: &Project, workspace: &Workspace) -> Result<Vec<VarSource>> {
+        rust::collect_schema(workspace)
+    }
 }
 
 pub trait ProjectAdapter {
@@ -22,6 +33,7 @@ struct DotenvRootLocalAdapter;
 struct TypeScriptPrivateAdapter;
 struct TypeScriptPublicAdapter;
 struct PythonAdapter;
+struct RustAdapter;
 
 impl WorkspaceAdapter for DotenvExampleAdapter {
     fn name(&self) -> &'static str {
@@ -90,6 +102,7 @@ pub fn workspace_adapters() -> Vec<Box<dyn WorkspaceAdapter>> {
         Box::new(TypeScriptPrivateAdapter),
         Box::new(TypeScriptPublicAdapter),
         Box::new(PythonAdapter),
+        Box::new(RustAdapter),
     ]
 }
 
@@ -103,4 +116,5 @@ pub fn workspace_has_owned_env_files(workspace: &Workspace) -> bool {
         || typescript::public_schema_path(workspace).exists()
         || typescript::should_use_plain_schema(workspace)
         || python::find_env_file(&workspace.root).is_some()
+        || rust::config_path(workspace).exists()
 }

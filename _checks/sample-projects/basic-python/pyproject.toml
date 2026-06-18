@@ -1,0 +1,14 @@
+[project]
+name = "crabenv-basic-python-fixture"
+version = "0.0.0"
+requires-python = ">=3.11"
+dependencies = [
+  "pydantic>=2.8",
+  "pydantic-settings>=2.4",
+]
+
+[project.scripts]
+basic-python = "basic_python.main:main"
+
+[tool.uv]
+package = true

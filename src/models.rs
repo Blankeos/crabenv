@@ -45,12 +45,15 @@ pub enum SourceKind {
     EnvLocal,
     TsSchema,
     PythonSchema,
+    RustSchema,
 }
 
 impl SourceKind {
     pub fn surface(&self) -> EnvSurface {
         match self {
-            SourceKind::TsSchema | SourceKind::PythonSchema => EnvSurface::Schema,
+            SourceKind::TsSchema | SourceKind::PythonSchema | SourceKind::RustSchema => {
+                EnvSurface::Schema
+            }
             SourceKind::EnvExample => EnvSurface::Template,
             SourceKind::EnvLocal => EnvSurface::Local,
         }

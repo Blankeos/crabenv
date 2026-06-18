@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::adapters::{dotenv, python, typescript};
+use crate::adapters::{dotenv, python, rust, typescript};
 use crate::cli::{AttachArgs, CopyArgs, DoctorArgs, FormatArgs, InitArgs, MutateArgs, RemoveArgs};
 use crate::copy_plan::{build_copy_plan, build_root_example_plan};
 use crate::discovery::app_workspaces;
@@ -304,6 +304,8 @@ pub fn run_add_or_update(project: &Project, args: MutateArgs, update: bool) -> R
 
         if app.framework == "python" {
             python::upsert_schema(app, &mutation)?;
+        } else if app.framework == "rust" {
+            rust::upsert_schema(app, &mutation)?;
         } else {
             typescript::upsert_schema(app, &mutation, &scope)?;
         }
@@ -362,6 +364,8 @@ pub fn run_attach(project: &Project, args: AttachArgs) -> Result<()> {
 
     if target.framework == "python" {
         python::upsert_schema(target, &mutation)?;
+    } else if target.framework == "rust" {
+        rust::upsert_schema(target, &mutation)?;
     } else if let Some(expr) = ts_expr {
         typescript::upsert_schema_expr(target, variable, &scope, &expr)?;
     } else {
@@ -644,6 +648,11 @@ fn remove_from_app(
 
     if app.framework == "python" {
         python::remove_schema(app, variable)?;
+        return Ok(());
+    }
+
+    if app.framework == "rust" {
+        rust::remove_schema(app, variable)?;
         return Ok(());
     }
 

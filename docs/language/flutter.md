@@ -1,6 +1,6 @@
 # Flutter / Dart
 
-Dependencies: none (Flutter SDK `String.fromEnvironment`)
+Dependencies: none (Flutter SDK `String.fromEnvironment`); monorepo justfile examples use `dotenv-cli`
 
 ```sh
 # single app
@@ -57,11 +57,14 @@ abstract class Env {
 `justfile` (or a similar script runner)
 
 ```just
+_env *cmd:
+    dotenv -e ../../.env -- {{ cmd }}
+
 dev *args:
-    flutter run --dart-define-from-file=.env {{ args }}
+    just _env "flutter run --dart-define-from-file=.env {{ args }}"
 
 build *args:
-    flutter build {{ args }} --dart-define-from-file=.env
+    just _env "flutter build {{ args }} --dart-define-from-file=.env"
 ```
 
 `main.dart`

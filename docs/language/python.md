@@ -1,6 +1,6 @@
 # Python
 
-Dependencies: `pydantic`, `pydantic-settings`
+Dependencies: `pydantic`, `pydantic-settings`; monorepo justfile examples use `dotenv-cli`
 
 ```sh
 # single app
@@ -56,8 +56,11 @@ def main() -> None:
 Monorepo local run (root `.env` → process env):
 
 ```just
-dev:
-    dotenv -e ../../.env -- uv run python -m api.main
+_env *cmd:
+    dotenv -e ../../.env -- {{ cmd }}
+
+dev *args:
+    just _env "uv run python -m api.main {{ args }}"
 ```
 
 Use `settings` in code — not `os.environ`. Docs and defaults live on `Field(...)`; keep `.env.example` keys and aliases aligned.

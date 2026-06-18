@@ -2,7 +2,7 @@ The simplest, opinionated way to keep .env files, schemas, and examples aligned.
 
 crabenv is an **opinionated**, language-agnostic CLI that keeps your environment variables aligned across schema, template, and local files. No new config file required. It validates, copies, and checks for drift so your team doesn't have to.
 
-This project will once and for all solve environment variables typesafe schema definition and documentation so it will never drift. This CLI only does what you can already do manually. So it doesn't introduce any new config files, if your team doesn't want to use crabenv. Completely fine too!
+This project will once and for all solve environment variables typesafe schema definition and documentation so it will never drift. This CLI only does what you can already do manually. It doesn't introduce any new config files so if your team doesn't want to use crabenv, it'll be completely fine!
 
 ## Installation
 
@@ -19,7 +19,7 @@ curl -sSL https://raw.githubusercontent.com/Blankeos/crabenv/main/install.sh | s
 
 - [x] TypeScript/Javascript and Monorepos (includes React, Solid, Vue, Svelte, Vite, NextJS, ReactNative, Backends, and Cloudflare apps)
 - [x] Python
-- [ ] Rust
+- [x] Rust
 - [x] Flutter
 - [x] More? Request an adapter.
 
@@ -38,7 +38,7 @@ curl -sSL https://raw.githubusercontent.com/Blankeos/crabenv/main/install.sh | s
 
 ## Philosophy
 
-- No new config file. Your team doesn't have to install crabenv, but it helps! The CLI just abstracts the manual maintenance.
+- No new config file. Your team doesn't have to install crabenv, but it helps a lot! The CLI just abstracts the manual maintenance.
 - Env config is synced across **surfaces**:
   - 1. **Schema** - The validator language-specific schema. Multiple based on apps. i.e. `env.ts`, `env.private.ts`, `env.public.ts`, `config.rs`, `config.dart`.
   - 2. **Template (`.env.example`)** - Safe example/template values for env values. Multiple based on apps.

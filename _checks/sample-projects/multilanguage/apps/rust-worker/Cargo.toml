@@ -1,0 +1,10 @@
+[package]
+name = "crabenv-multilang-rust-worker"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+dotenvy = "0.15"
+figment = { version = "0.10", features = ["env", "toml"] }
+serde = { version = "1", features = ["derive"] }

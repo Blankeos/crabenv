@@ -5,7 +5,9 @@
   "workspaces": [
     "apps/next-web",
     "apps/hono-api",
-    "apps/cloudflare-worker"
+    "apps/cloudflare-worker",
+    "apps/flutter-mobile",
+    "apps/rust-worker"
   ],
   "scripts": {
     "crabenv:list": "crabenv list",

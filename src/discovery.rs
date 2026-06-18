@@ -184,6 +184,9 @@ fn detect_framework(root: &Path) -> String {
     {
         return "python".to_string();
     }
+    if root.join("src/config.rs").exists() || root.join("Cargo.toml").exists() {
+        return "rust".to_string();
+    }
     if let Ok(package_json) = fs::read_to_string(root.join("package.json")) {
         if package_json.contains("\"hono\"") {
             return "hono".to_string();

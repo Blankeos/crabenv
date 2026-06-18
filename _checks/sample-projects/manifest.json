@@ -14,6 +14,45 @@
       ]
     },
     {
+      "id": "basic-python",
+      "path": "basic-python",
+      "kind": "single-app",
+      "apps": [
+        {
+          "id": "basic-python",
+          "language": "python",
+          "framework": "pydantic-settings",
+          "envSchemas": ["src/basic_python/env.py"]
+        }
+      ]
+    },
+    {
+      "id": "basic-flutter",
+      "path": "basic-flutter",
+      "kind": "single-app",
+      "apps": [
+        {
+          "id": "basic-flutter",
+          "language": "flutter",
+          "framework": "dart-define",
+          "envSchemas": ["lib/config/env.dart"]
+        }
+      ]
+    },
+    {
+      "id": "basic-rust",
+      "path": "basic-rust",
+      "kind": "single-app",
+      "apps": [
+        {
+          "id": "basic-rust",
+          "language": "rust",
+          "framework": "figment",
+          "envSchemas": ["src/config.rs"]
+        }
+      ]
+    },
+    {
       "id": "monorepo",
       "path": "monorepo",
       "kind": "typescript-monorepo",
@@ -48,6 +87,18 @@
           "language": "python",
           "framework": "pydantic-settings",
           "envSchemas": ["src/python_service/env.py"]
+        },
+        {
+          "id": "flutter-mobile",
+          "language": "flutter",
+          "framework": "dart-define",
+          "envSchemas": ["lib/config/env.dart"]
+        },
+        {
+          "id": "rust-worker",
+          "language": "rust",
+          "framework": "figment",
+          "envSchemas": ["src/config.rs"]
         },
         {
           "id": "next-web",

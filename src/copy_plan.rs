@@ -156,7 +156,10 @@ fn shared_schema_names(project: &Project) -> Result<BTreeSet<String>> {
 
     let mut owners_by_name = BTreeMap::<String, BTreeSet<_>>::new();
     for source in collect_sources(project)? {
-        if matches!(source.kind, SourceKind::TsSchema | SourceKind::PythonSchema) {
+        if matches!(
+            source.kind,
+            SourceKind::TsSchema | SourceKind::PythonSchema | SourceKind::RustSchema
+        ) {
             owners_by_name
                 .entry(source.name)
                 .or_default()

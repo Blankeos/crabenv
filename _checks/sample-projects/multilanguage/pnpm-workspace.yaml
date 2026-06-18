@@ -2,4 +2,6 @@ packages:
   - "apps/next-web"
   - "apps/hono-api"
   - "apps/cloudflare-worker"
+  - "apps/flutter-mobile"
+  - "apps/rust-worker"
 

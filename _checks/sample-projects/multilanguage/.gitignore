@@ -3,6 +3,9 @@ node_modules
 .dev.vars
 .next
 dist
+target
+.dart_tool
+build
 .venv
 __pycache__
 *.pyc
