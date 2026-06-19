@@ -5,7 +5,7 @@
 //! to a guided wizard with `intro` / `outro` / `outro_cancel`.
 
 use anyhow::{bail, Result};
-use cliclack::{confirm, input, intro, outro, outro_cancel, select};
+use cliclack::{confirm, input, intro, multiselect, outro, outro_cancel, select};
 use colored::Colorize;
 use std::path::PathBuf;
 
@@ -56,7 +56,7 @@ pub fn prompt_add_or_update(project: &Project, update: bool) -> Result<MutateArg
 
     let selected_old = old_context
         .as_ref()
-        .and_then(|context| context.for_owner(&owner, shared));
+        .and_then(|context| context.for_owner(&owner, shared.is_some()));
 
     // --- Scope (private/public) ---
     let public = prompt_scope(selected_old.as_ref().map(|record| &record.scope))?;
@@ -122,8 +122,8 @@ pub fn prompt_add_or_update(project: &Project, update: bool) -> Result<MutateArg
 
     let action = if update { "Update" } else { "Add" };
     let scope_str = if public { "public" } else { "private" };
-    let owner_str = if shared {
-        format!("shared({})", apps.len())
+    let owner_str = if let Some(shared) = &shared {
+        format_shared_prompt_target(shared, &apps)
     } else {
         owner.to_string_lossy().to_string()
     };
@@ -260,7 +260,7 @@ pub fn prompt_remove(project: &Project) -> Result<RemoveArgs> {
             .item(
                 "shared",
                 format!("All owners ({})", candidates.len()),
-                "remove from every owner that defines this variable",
+                "remove from all or selected owners that define this variable",
             )
             .item(
                 "one",
@@ -270,21 +270,31 @@ pub fn prompt_remove(project: &Project) -> Result<RemoveArgs> {
             .interact()?;
 
         if choice == "shared" {
-            (None, true)
+            let owners = candidates
+                .iter()
+                .map(|r| r.owner.clone())
+                .collect::<Vec<_>>();
+            (
+                None,
+                Some(prompt_shared_owner_paths(
+                    &owners,
+                    "Select owners to remove from",
+                )?),
+            )
         } else {
             let owners = candidates
                 .iter()
                 .map(|r| r.owner.clone())
                 .collect::<Vec<_>>();
             let owner = prompt_select_owners(&owners, "remove from")?;
-            (Some(owner), false)
+            (Some(owner), None)
         }
     } else {
-        (None, false) // single owner — will be auto-detected
+        (None, None) // single owner — will be auto-detected
     };
 
     // --- Scope ---
-    let public = if shared {
+    let public = if shared.is_some() {
         false
     } else {
         let scopes = candidates
@@ -309,8 +319,12 @@ pub fn prompt_remove(project: &Project) -> Result<RemoveArgs> {
     };
 
     let scope_str = if public { "public" } else { "private" };
-    let owner_str = if shared {
-        format!("all owners ({})", candidates.len())
+    let owner_str = if let Some(shared) = &shared {
+        let owners = candidates
+            .iter()
+            .map(|record| record.owner.clone())
+            .collect::<Vec<_>>();
+        format_shared_owner_paths(shared, &owners)
     } else if let Some(ref o) = owner {
         display_rel(o)
     } else {
@@ -385,6 +399,21 @@ impl UpdateContext {
             .find(|record| record.owner == *owner)
             .cloned()
             .or_else(|| common_record(&self.records))
+    }
+}
+
+fn format_shared_owner_paths(shared: &[PathBuf], all_owners: &[PathBuf]) -> String {
+    if shared.is_empty() || shared.len() == unique_paths(all_owners.to_vec()).len() {
+        "shared(*)".to_string()
+    } else {
+        format!(
+            "shared({})",
+            shared
+                .iter()
+                .map(|owner| display_rel(owner))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
     }
 }
 
@@ -521,25 +550,102 @@ fn prompt_owner(
     apps: &[&Workspace],
     label: &str,
     initial_owner: Option<&PathBuf>,
-) -> Result<(PathBuf, bool)> {
+) -> Result<(PathBuf, Option<Vec<PathBuf>>)> {
     if apps.len() == 1 {
-        return Ok((apps[0].rel.clone(), false));
+        return Ok((apps[0].rel.clone(), None));
     }
 
-    let mut candidates = vec!["__shared__".to_string()];
-    candidates.extend(apps.iter().map(|a| a.rel.to_string_lossy().to_string()));
+    let mut candidates = vec!["Shared".to_string()];
+    candidates.extend(apps.iter().map(|app| app.rel.to_string_lossy().to_string()));
     let initial = initial_owner.map(|owner| owner.to_string_lossy().to_string());
 
     let choice = prompt_searchable_with_initial(
-        &format!("Select {label} owner (or shared)"),
+        &format!("Select {label} owner"),
         candidates,
         initial.as_deref(),
     )?;
 
-    if choice == "__shared__" {
-        Ok((PathBuf::from("."), true))
+    if choice == "Shared" {
+        let shared = prompt_shared_targets(apps)?;
+        Ok((PathBuf::from("."), Some(shared)))
     } else {
-        Ok((PathBuf::from(choice), false))
+        Ok((PathBuf::from(choice), None))
+    }
+}
+
+fn prompt_shared_targets(apps: &[&Workspace]) -> Result<Vec<PathBuf>> {
+    const ALL: &str = "*";
+
+    let mut prompt = multiselect("Select shared app owners")
+        .item(
+            ALL.to_string(),
+            "All (*)".to_string(),
+            "apply to every app owner",
+        )
+        .initial_values(vec![ALL.to_string()])
+        .max_rows(10);
+
+    for app in apps {
+        let rel = app.rel.to_string_lossy().to_string();
+        prompt = prompt.item(rel.clone(), rel, "");
+    }
+
+    let selected = prompt.interact()?;
+    if selected.iter().any(|value| value == ALL) {
+        Ok(Vec::new())
+    } else {
+        Ok(unique_paths(
+            selected.into_iter().map(PathBuf::from).collect(),
+        ))
+    }
+}
+
+fn prompt_shared_owner_paths(owners: &[PathBuf], message: &str) -> Result<Vec<PathBuf>> {
+    const ALL: &str = "*";
+    let owners = unique_paths(owners.to_vec());
+
+    let mut prompt = multiselect(message)
+        .item(
+            ALL.to_string(),
+            "All (*)".to_string(),
+            "use every listed owner",
+        )
+        .initial_values(vec![ALL.to_string()])
+        .max_rows(10);
+
+    for owner in &owners {
+        let rel = owner.to_string_lossy().to_string();
+        prompt = prompt.item(rel.clone(), rel, "");
+    }
+
+    let selected = prompt.interact()?;
+    if selected.iter().any(|value| value == ALL) {
+        Ok(Vec::new())
+    } else {
+        Ok(unique_paths(
+            selected.into_iter().map(PathBuf::from).collect(),
+        ))
+    }
+}
+
+fn unique_paths(mut paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn format_shared_prompt_target(shared: &[PathBuf], apps: &[&Workspace]) -> String {
+    if shared.is_empty() || shared.len() == apps.len() {
+        "shared(*)".to_string()
+    } else {
+        format!(
+            "shared({})",
+            shared
+                .iter()
+                .map(|owner| display_rel(owner))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
     }
 }
 

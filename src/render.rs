@@ -2,14 +2,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use crate::graph::EnvGraph;
-use crate::models::{EnvRecord, EnvSurface, Scope};
+use crate::models::{EnvRecord, EnvSurface, Project, Scope};
 use crate::ordering::compare_env_names;
 use crate::util::{color, display_rel};
 
 const DESCRIPTION_WIDTH: usize = 48;
 
-pub fn render_list(graph: &EnvGraph) {
+pub fn render_list(project: &Project, graph: &EnvGraph) {
     let grouped = group_records_by_name(graph);
+    let app_owner_count = app_owner_count(project);
     let mut rows = grouped
         .values()
         .filter(|records| group_has_definition_surface(records))
@@ -19,7 +20,7 @@ pub fn render_list(graph: &EnvGraph) {
                 .first()
                 .map(|record| record.name.clone())
                 .unwrap_or_default(),
-            owner: format_group_owner(records),
+            owner: format_group_owner(records, app_owner_count),
             scope: format_group_scope(records),
             value_type: format_group_type(records),
             surfaces: format_group_surfaces(records),
@@ -27,11 +28,12 @@ pub fn render_list(graph: &EnvGraph) {
         })
         .collect::<Vec<_>>();
 
-    rows.sort_by(|left, right| compare_inventory_rows(&left.name, &left.owner, &right.name, &right.owner));
+    rows.sort_by(|left, right| {
+        compare_inventory_rows(&left.name, &left.owner, &right.name, &right.owner)
+    });
     for (index, row) in rows.iter_mut().enumerate() {
         row.index = (index + 1).to_string();
     }
-
     let widths = ListWidths::from_rows(&rows);
 
     println!("{} variable(s)", rows.len());
@@ -92,8 +94,17 @@ pub fn render_list(graph: &EnvGraph) {
     }
 }
 
-pub fn render_doctor_inventory(graph: &EnvGraph) {
+fn app_owner_count(project: &Project) -> usize {
+    project
+        .workspaces
+        .iter()
+        .filter(|workspace| workspace.kind == crate::models::WorkspaceKind::App)
+        .count()
+}
+
+pub fn render_doctor_inventory(project: &Project, graph: &EnvGraph) {
     let grouped = group_records_by_name(graph);
+    let app_owner_count = app_owner_count(project);
     let mut rows = grouped
         .values()
         .map(|records| DoctorInventoryRow {
@@ -101,12 +112,14 @@ pub fn render_doctor_inventory(graph: &EnvGraph) {
                 .first()
                 .map(|record| record.name.clone())
                 .unwrap_or_default(),
-            owner: format_group_owner(records),
+            owner: format_group_owner(records, app_owner_count),
             surfaces: group_surfaces(records),
         })
         .collect::<Vec<_>>();
 
-    rows.sort_by(|left, right| compare_inventory_rows(&left.name, &left.owner, &right.name, &right.owner));
+    rows.sort_by(|left, right| {
+        compare_inventory_rows(&left.name, &left.owner, &right.name, &right.owner)
+    });
     let show_owner = rows.iter().any(|row| row.owner != ".");
     let name_width = rows
         .iter()
@@ -194,7 +207,7 @@ fn group_records_by_name(graph: &EnvGraph) -> BTreeMap<String, Vec<&EnvRecord>> 
     grouped
 }
 
-fn format_group_owner(records: &[&EnvRecord]) -> String {
+fn format_group_owner(records: &[&EnvRecord], app_owner_count: usize) -> String {
     let schema_owners = owners_matching(records, record_has_schema_surface);
     let owners = if schema_owners.is_empty() {
         let template_owners = owners_matching(records, record_has_template_surface);
@@ -208,7 +221,11 @@ fn format_group_owner(records: &[&EnvRecord]) -> String {
     };
 
     if owners.len() > 1 {
-        format!("shared({})", owners.len())
+        if owners.len() == app_owner_count {
+            "shared(*)".to_string()
+        } else {
+            format!("shared({})", owners.len())
+        }
     } else {
         owners
             .iter()
@@ -450,6 +467,7 @@ struct DoctorInventoryRow {
 mod tests {
     use super::*;
     use std::cmp::Ordering;
+    use std::collections::{BTreeMap, BTreeSet};
 
     #[test]
     fn wrap_cell_wraps_long_descriptions() {
@@ -497,5 +515,38 @@ mod tests {
             compare_inventory_rows("S3_BUCKET", "shared(2)", "RESEND_API_KEY", "shared(3)"),
             Ordering::Greater
         );
+    }
+
+    #[test]
+    fn group_owner_marks_all_app_owners_as_shared_star() {
+        let records = [record("apps/api"), record("apps/web")];
+        let refs = records.iter().collect::<Vec<_>>();
+
+        assert_eq!(format_group_owner(&refs, 2), "shared(*)");
+    }
+
+    #[test]
+    fn group_owner_keeps_count_for_partial_shared_owners() {
+        let records = [record("apps/api"), record("apps/web")];
+        let refs = records.iter().collect::<Vec<_>>();
+
+        assert_eq!(format_group_owner(&refs, 3), "shared(2)");
+    }
+
+    fn record(owner: &str) -> EnvRecord {
+        EnvRecord {
+            name: "DATABASE_URL".to_string(),
+            owner: PathBuf::from(owner),
+            scope: Scope::Private,
+            value_type: Some("string".to_string()),
+            required: Some(true),
+            default_value: None,
+            description: None,
+            example_value: None,
+            local_present: false,
+            surfaces: BTreeSet::from([EnvSurface::Schema]),
+            surface_sources: BTreeMap::new(),
+            sources: BTreeSet::new(),
+        }
     }
 }

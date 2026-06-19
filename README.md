@@ -74,7 +74,8 @@ crabenv update # Wizard-like experience
 crabenv remove # Wizard-like experience
 
 crabenv add {VARIABLE_NAME}
-    --shared   # if monorepo, adds it to all apps
+    --shared   # if monorepo, adds it to all apps (also --shared '*')
+    --shared apps/api apps/web # add it to selected apps
     --example  # optional, for .env.example
     --optional # optional, required by default
     --default  # optional

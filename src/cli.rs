@@ -1,4 +1,4 @@
-use clap::{Args, Parser, Subcommand};
+use clap::{ArgAction, Args, Parser, Subcommand};
 use std::path::PathBuf;
 
 use crate::models::VarMutation;
@@ -58,9 +58,9 @@ pub enum Commands {
     )]
     Copy(CopyArgs),
     #[command(
-        about = "Add an env var to one owner, or every app owner with --shared",
-        long_about = "Add an env var by updating the template (.env.example) and schema file. Use --owner in monorepos for one app. Use --shared to write the same variable to every app owner so it is derived as shared(N). Private scope is the default; pass --public for env.public.ts.",
-        after_help = "Examples:\n  crabenv add DATABASE_URL --example file:./local.db\n  crabenv add DATABASE_URL --owner apps/hono-api --example file:./local.db\n  crabenv add DATABASE_URL --shared --example file:./local.db\n  crabenv add HONO_PORT --owner apps/hono-api --number --optional --example 8787\n  crabenv add LOG_LEVEL --owner apps/api --enum debug,info,warn,error --default info\n  crabenv add NEXT_PUBLIC_API_URL --owner apps/next-web --public --example http://localhost:8787"
+        about = "Add an env var to one owner, selected owners, or every app owner with --shared",
+        long_about = "Add an env var by updating the template (.env.example) and schema file. Use --owner in monorepos for one app. Use bare --shared or --shared '*' to write to every app owner; pass app owner paths to --shared to write to selected owners. Private scope is the default; pass --public for env.public.ts.",
+        after_help = "Examples:\n  crabenv add DATABASE_URL --example file:./local.db\n  crabenv add DATABASE_URL --owner apps/hono-api --example file:./local.db\n  crabenv add DATABASE_URL --shared --example file:./local.db\n  crabenv add DATABASE_URL --shared apps/hono-api apps/next-web --example file:./local.db\n  crabenv add DATABASE_URL --shared=apps/hono-api,apps/next-web --example file:./local.db\n  crabenv add HONO_PORT --owner apps/hono-api --number --optional --example 8787\n  crabenv add LOG_LEVEL --owner apps/api --enum debug,info,warn,error --default info\n  crabenv add NEXT_PUBLIC_API_URL --owner apps/next-web --public --example http://localhost:8787"
     )]
     Add(MutateArgs),
     #[command(
@@ -70,15 +70,15 @@ pub enum Commands {
     )]
     Attach(AttachArgs),
     #[command(
-        about = "Replace an env var definition for one owner, or every app owner with --shared",
-        long_about = "Replace an env var definition by updating the template (.env.example) and schema entry. This has the same flags as add, but communicates intent when changing an existing variable. Use --shared to update every app owner.",
-        after_help = "Examples:\n  crabenv update DATABASE_URL --owner apps/hono-api --example file:./new-local.db\n  crabenv update DATABASE_URL --shared --example file:./new-local.db\n  crabenv update LOG_LEVEL --owner apps/api --enum debug,info,warn,error --default debug"
+        about = "Replace an env var definition for one owner, selected owners, or every app owner with --shared",
+        long_about = "Replace an env var definition by updating the template (.env.example) and schema entry. This has the same flags as add, but communicates intent when changing an existing variable. Use bare --shared or --shared '*' for every app owner; pass app owner paths to --shared for selected owners.",
+        after_help = "Examples:\n  crabenv update DATABASE_URL --owner apps/hono-api --example file:./new-local.db\n  crabenv update DATABASE_URL --shared --example file:./new-local.db\n  crabenv update DATABASE_URL --shared apps/hono-api apps/next-web --example file:./new-local.db\n  crabenv update LOG_LEVEL --owner apps/api --enum debug,info,warn,error --default debug"
     )]
     Update(MutateArgs),
     #[command(
-        about = "Remove an env var from one owner, or every owner with --shared",
-        long_about = "Remove an env var by deleting it from template (.env.example) and schema files. In monorepos, crabenv can infer the owner if only one app defines the variable. Use --shared to remove the variable from every owner that defines it.",
-        after_help = "Examples:\n  crabenv remove DATABASE_URL --owner apps/next-web\n  crabenv remove DATABASE_URL --shared\n  crabenv remove NEXT_PUBLIC_API_URL --owner apps/next-web --public"
+        about = "Remove an env var from one owner, selected owners, or every owner with --shared",
+        long_about = "Remove an env var by deleting it from template (.env.example) and schema files. In monorepos, crabenv can infer the owner if only one app defines the variable. Use bare --shared or --shared '*' to remove from every owner that defines it; pass owner paths to remove from selected owners.",
+        after_help = "Examples:\n  crabenv remove DATABASE_URL --owner apps/next-web\n  crabenv remove DATABASE_URL --shared\n  crabenv remove DATABASE_URL --shared apps/hono-api apps/next-web\n  crabenv remove NEXT_PUBLIC_API_URL --owner apps/next-web --public"
     )]
     Remove(RemoveArgs),
 }
@@ -123,21 +123,28 @@ pub struct CopyArgs {
 
 #[derive(Args, Clone)]
 pub struct MutateArgs {
-    #[arg(help = "Environment variable name, for example DATABASE_URL")]
+    #[arg(
+        index = 1,
+        help = "Environment variable name, for example DATABASE_URL"
+    )]
     pub variable: Option<String>,
 
     #[arg(
         long,
         value_name = "OWNER",
-        help = "App owner path, for example apps/next-web. Use --shared for every app owner"
+        help = "App owner path, for example apps/next-web. Use --shared for multiple app owners"
     )]
     pub owner: Option<PathBuf>,
 
     #[arg(
         long,
-        help = "Apply to every app owner so the variable is derived as shared"
+        value_name = "OWNER",
+        num_args = 0..,
+        value_delimiter = ',',
+        action = ArgAction::Append,
+        help = "Apply to every app owner (bare or '*') or selected app owners"
     )]
-    pub shared: bool,
+    pub shared: Option<Vec<PathBuf>>,
 
     #[arg(long, help = "Write to env.public.ts instead of env.private.ts")]
     pub public: bool,
@@ -240,18 +247,25 @@ pub struct AttachArgs {
 
 #[derive(Args, Clone)]
 pub struct RemoveArgs {
-    #[arg(help = "Environment variable name to remove")]
+    #[arg(index = 1, help = "Environment variable name to remove")]
     pub variable: Option<String>,
 
     #[arg(
         long,
         value_name = "OWNER",
-        help = "App owner path, for example apps/next-web. Use --shared to remove from every defining owner"
+        help = "App owner path, for example apps/next-web. Use --shared for multiple defining owners"
     )]
     pub owner: Option<PathBuf>,
 
-    #[arg(long, help = "Remove from every owner that defines this variable")]
-    pub shared: bool,
+    #[arg(
+        long,
+        value_name = "OWNER",
+        num_args = 0..,
+        value_delimiter = ',',
+        action = ArgAction::Append,
+        help = "Remove from every defining owner (bare or '*') or selected defining owners"
+    )]
+    pub shared: Option<Vec<PathBuf>>,
 
     #[arg(long, help = "Remove from env.public.ts instead of env.private.ts")]
     pub public: bool,

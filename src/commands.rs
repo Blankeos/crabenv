@@ -10,7 +10,7 @@ use crate::discovery::app_workspaces;
 use crate::graph::{build_graph, EnvGraph};
 use crate::issues::collect_issues;
 use crate::models::{
-    EnvRecord, EnvSurface, FileWritePlan, Fix, Project, Scope, Severity, VarMutation,
+    EnvRecord, EnvSurface, FileWritePlan, Fix, Project, Scope, Severity, VarMutation, Workspace,
 };
 use crate::render::{render_doctor_inventory, render_list};
 use crate::util::{color, display_rel, normalize_rel_display, validate_var_name};
@@ -79,7 +79,7 @@ pub fn run_init(project: &Project, args: InitArgs) -> Result<()> {
 
 pub fn run_list(project: &Project) -> Result<()> {
     let graph = build_graph(project)?;
-    render_list(&graph);
+    render_list(project, &graph);
     Ok(())
 }
 
@@ -98,7 +98,7 @@ pub fn run_doctor(project: &Project, args: DoctorArgs) -> Result<()> {
         }
     }
 
-    render_doctor_inventory(&graph);
+    render_doctor_inventory(project, &graph);
 
     if args.fix {
         let mut fixes = Vec::new();
@@ -282,7 +282,7 @@ pub fn run_add_or_update(project: &Project, args: MutateArgs, update: bool) -> R
 
     let variable = args.variable.as_deref().unwrap_or("");
     validate_var_name(variable)?;
-    let apps = select_mutation_apps(project, args.owner.as_deref(), args.shared)?;
+    let selection = select_mutation_apps(project, args.owner.as_deref(), args.shared.as_deref())?;
 
     let scope = if args.public {
         Scope::Public
@@ -299,7 +299,7 @@ pub fn run_add_or_update(project: &Project, args: MutateArgs, update: bool) -> R
         ..VarMutation::from(&args)
     };
 
-    for app in &apps {
+    for app in &selection.apps {
         dotenv::upsert_example(&dotenv::example_path(app), variable, &env_value)?;
 
         if app.framework == "python" {
@@ -311,7 +311,12 @@ pub fn run_add_or_update(project: &Project, args: MutateArgs, update: bool) -> R
         }
     }
 
-    print_mutation_result(if update { "updated" } else { "added" }, variable, &apps);
+    print_mutation_result(
+        if update { "updated" } else { "added" },
+        variable,
+        &selection.apps,
+        &selection.target,
+    );
 
     if update {
         sync_root_example(project)?;
@@ -394,14 +399,18 @@ pub fn run_remove(project: &Project, args: RemoveArgs) -> Result<()> {
 
     let variable = args.variable.as_deref().unwrap_or("");
     validate_var_name(variable)?;
-    let targets = select_remove_targets(project, &args, variable)?;
+    let selection = select_remove_targets(project, &args, variable)?;
 
-    for (app, scope) in &targets {
+    for (app, scope) in &selection.targets {
         remove_from_app(app, variable, scope)?;
     }
 
-    let apps = targets.iter().map(|(app, _)| *app).collect::<Vec<_>>();
-    print_mutation_result("removed", variable, &apps);
+    let apps = selection
+        .targets
+        .iter()
+        .map(|(app, _)| *app)
+        .collect::<Vec<_>>();
+    print_mutation_result("removed", variable, &apps, &selection.target);
     sync_root_example(project)?;
     Ok(())
 }
@@ -553,52 +562,109 @@ enum RemoveScope {
     All,
 }
 
+#[derive(Clone, Debug)]
+enum SharedTarget {
+    All,
+    Selected(Vec<PathBuf>),
+}
+
+#[derive(Debug)]
+enum MutationTarget {
+    Single,
+    Shared(SharedTarget),
+}
+
+#[derive(Debug)]
+struct MutationSelection<'a> {
+    apps: Vec<&'a Workspace>,
+    target: MutationTarget,
+}
+
+#[derive(Debug)]
+struct RemoveSelection<'a> {
+    targets: Vec<(&'a Workspace, RemoveScope)>,
+    target: MutationTarget,
+}
+
 fn select_mutation_apps<'a>(
     project: &'a Project,
     owner: Option<&Path>,
-    shared: bool,
-) -> Result<Vec<&'a crate::models::Workspace>> {
-    if shared || owner.is_some_and(is_shared_owner_alias) {
-        let apps = app_workspaces(project).collect::<Vec<_>>();
-        if apps.is_empty() {
-            bail!("no app owners found");
-        }
-        return Ok(apps);
+    shared: Option<&[PathBuf]>,
+) -> Result<MutationSelection<'a>> {
+    if let Some(shared) = shared_target_from_args(shared) {
+        let apps = select_shared_apps(project, &shared)?;
+        return Ok(MutationSelection {
+            apps,
+            target: MutationTarget::Shared(shared),
+        });
     }
 
-    Ok(vec![select_app(project, owner)?])
+    if let Some(owner) = owner.filter(|owner| is_shared_owner_alias(owner)) {
+        let shared = shared_target_from_owner_alias(owner);
+        let apps = select_shared_apps(project, &shared)?;
+        return Ok(MutationSelection {
+            apps,
+            target: MutationTarget::Shared(shared),
+        });
+    }
+
+    Ok(MutationSelection {
+        apps: vec![select_app(project, owner)?],
+        target: MutationTarget::Single,
+    })
 }
 
 fn select_remove_targets<'a>(
     project: &'a Project,
     args: &RemoveArgs,
     variable: &str,
-) -> Result<Vec<(&'a crate::models::Workspace, RemoveScope)>> {
-    if args.shared || args.owner.as_deref().is_some_and(is_shared_owner_alias) {
+) -> Result<RemoveSelection<'a>> {
+    if let Some(shared) = shared_target_from_args(args.shared.as_deref()).or_else(|| {
+        args.owner
+            .as_deref()
+            .filter(|owner| is_shared_owner_alias(owner))
+            .map(shared_target_from_owner_alias)
+    }) {
         let records = definition_records_for_variable(project, variable)?;
         if records.is_empty() {
             bail!("{} was not found in any app owner", variable);
         }
 
-        let mut owners = records
-            .iter()
-            .map(|record| record.owner.clone())
-            .collect::<Vec<_>>();
-        owners.sort();
-        owners.dedup();
+        let owners = match &shared {
+            SharedTarget::All => unique_record_owners(&records),
+            SharedTarget::Selected(owners) => {
+                let existing_owners = unique_record_owners(&records)
+                    .into_iter()
+                    .collect::<BTreeSet<_>>();
+                for owner in owners {
+                    if !existing_owners.contains(owner) {
+                        bail!("{} is not defined in {}", variable, display_rel(owner));
+                    }
+                }
+                owners.clone()
+            }
+        };
 
-        return owners
+        let targets = owners
             .into_iter()
             .map(|owner| {
                 let app = select_app(project, Some(owner.as_path()))?;
                 Ok((app, RemoveScope::All))
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
+
+        return Ok(RemoveSelection {
+            targets,
+            target: MutationTarget::Shared(shared),
+        });
     }
 
     if let Some(owner) = args.owner.as_deref() {
         let app = select_app(project, Some(owner))?;
-        return Ok(vec![(app, RemoveScope::Scope(remove_arg_scope(args)))]);
+        return Ok(RemoveSelection {
+            targets: vec![(app, RemoveScope::Scope(remove_arg_scope(args)))],
+            target: MutationTarget::Single,
+        });
     }
 
     let records = definition_records_for_variable(project, variable)?;
@@ -609,7 +675,10 @@ fn select_remove_targets<'a>(
             Scope::Private | Scope::Public => RemoveScope::Scope(record.scope.clone()),
             Scope::Unknown => RemoveScope::All,
         };
-        return Ok(vec![(app, scope)]);
+        return Ok(RemoveSelection {
+            targets: vec![(app, scope)],
+            target: MutationTarget::Single,
+        });
     }
 
     if records.len() > 1 {
@@ -624,10 +693,13 @@ fn select_remove_targets<'a>(
         );
     }
 
-    Ok(vec![(
-        select_app(project, None)?,
-        RemoveScope::Scope(remove_arg_scope(args)),
-    )])
+    Ok(RemoveSelection {
+        targets: vec![(
+            select_app(project, None)?,
+            RemoveScope::Scope(remove_arg_scope(args)),
+        )],
+        target: MutationTarget::Single,
+    })
 }
 
 fn definition_records_for_variable(project: &Project, variable: &str) -> Result<Vec<EnvRecord>> {
@@ -637,6 +709,65 @@ fn definition_records_for_variable(project: &Project, variable: &str) -> Result<
         .filter(|record| record_has_schema_surface(record) || record_has_template_surface(record))
         .cloned()
         .collect())
+}
+
+fn shared_target_from_args(shared: Option<&[PathBuf]>) -> Option<SharedTarget> {
+    shared.map(|owners| {
+        if owners.is_empty() || owners.iter().any(|owner| is_shared_owner_alias(owner)) {
+            SharedTarget::All
+        } else {
+            SharedTarget::Selected(normalize_unique_owners(owners))
+        }
+    })
+}
+
+fn shared_target_from_owner_alias(owner: &Path) -> SharedTarget {
+    debug_assert!(is_shared_owner_alias(owner));
+    SharedTarget::All
+}
+
+fn normalize_unique_owners(owners: &[PathBuf]) -> Vec<PathBuf> {
+    let mut normalized = owners
+        .iter()
+        .map(|owner| normalize_rel_display(owner))
+        .collect::<Vec<_>>();
+    normalized.sort();
+    normalized.dedup();
+    normalized
+}
+
+fn select_shared_apps<'a>(
+    project: &'a Project,
+    target: &SharedTarget,
+) -> Result<Vec<&'a Workspace>> {
+    match target {
+        SharedTarget::All => {
+            let apps = app_workspaces(project).collect::<Vec<_>>();
+            if apps.is_empty() {
+                bail!("no app owners found");
+            }
+            Ok(apps)
+        }
+        SharedTarget::Selected(owners) => {
+            if owners.is_empty() {
+                bail!("pass at least one app owner to --shared, or use --shared '*' for all");
+            }
+            owners
+                .iter()
+                .map(|owner| select_app(project, Some(owner.as_path())))
+                .collect()
+        }
+    }
+}
+
+fn unique_record_owners(records: &[EnvRecord]) -> Vec<PathBuf> {
+    let mut owners = records
+        .iter()
+        .map(|record| record.owner.clone())
+        .collect::<Vec<_>>();
+    owners.sort();
+    owners.dedup();
+    owners
 }
 
 fn remove_from_app(
@@ -675,14 +806,47 @@ fn remove_arg_scope(args: &RemoveArgs) -> Scope {
     }
 }
 
-fn print_mutation_result(action: &str, variable: &str, apps: &[&crate::models::Workspace]) {
-    if apps.len() > 1 {
-        println!("{action} {variable} in shared({})", apps.len());
+fn print_mutation_result(
+    action: &str,
+    variable: &str,
+    apps: &[&Workspace],
+    target: &MutationTarget,
+) {
+    if apps.len() > 1 || matches!(target, MutationTarget::Shared(_)) {
+        println!(
+            "{action} {variable} in {}",
+            format_mutation_target(apps, target)
+        );
         for app in apps {
             println!("- {}", display_rel(&app.rel));
         }
     } else if let Some(app) = apps.first() {
         println!("{action} {variable} in {}", display_rel(&app.rel));
+    }
+}
+
+fn format_mutation_target(apps: &[&Workspace], target: &MutationTarget) -> String {
+    match target {
+        MutationTarget::Single => apps
+            .first()
+            .map(|app| display_rel(&app.rel))
+            .unwrap_or_else(|| "-".to_string()),
+        MutationTarget::Shared(SharedTarget::All) => "shared(*)".to_string(),
+        MutationTarget::Shared(SharedTarget::Selected(owners)) => {
+            let owners = if owners.is_empty() {
+                apps.iter().map(|app| app.rel.clone()).collect::<Vec<_>>()
+            } else {
+                owners.clone()
+            };
+            format!(
+                "shared({})",
+                owners
+                    .iter()
+                    .map(|owner| display_rel(owner))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }
     }
 }
 
@@ -692,4 +856,52 @@ fn is_shared_owner_alias(owner: &Path) -> bool {
         normalized.to_string_lossy().as_ref(),
         "shared" | "all" | "*"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_target_from_args_treats_empty_and_star_as_all() {
+        assert!(matches!(
+            shared_target_from_args(Some(&[])),
+            Some(SharedTarget::All)
+        ));
+
+        let owners = vec![PathBuf::from("*")];
+        assert!(matches!(
+            shared_target_from_args(Some(&owners)),
+            Some(SharedTarget::All)
+        ));
+    }
+
+    #[test]
+    fn shared_target_from_args_normalizes_and_dedupes_selected_owners() {
+        let owners = vec![
+            PathBuf::from("apps/web"),
+            PathBuf::from("apps/api"),
+            PathBuf::from("apps/web"),
+        ];
+
+        let Some(SharedTarget::Selected(selected)) = shared_target_from_args(Some(&owners)) else {
+            panic!("expected selected shared owners");
+        };
+
+        assert_eq!(
+            selected,
+            vec![PathBuf::from("apps/api"), PathBuf::from("apps/web")]
+        );
+    }
+
+    #[test]
+    fn shared_owner_aliases_stay_backward_compatible_all_targets() {
+        for owner in ["shared", "all", "*"] {
+            assert!(is_shared_owner_alias(Path::new(owner)));
+            assert!(matches!(
+                shared_target_from_owner_alias(Path::new(owner)),
+                SharedTarget::All
+            ));
+        }
+    }
 }
