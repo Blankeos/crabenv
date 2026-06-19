@@ -28,7 +28,7 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Init(args) => commands::run_init(&project, args),
-        Commands::List => commands::run_list(&project),
+        Commands::List(args) => commands::run_list(&project, args),
         Commands::Doctor(args) => commands::run_doctor(&project, args),
         Commands::Format(args) => commands::run_format(&project, args),
         Commands::Copy(args) => commands::run_copy(&project, args),

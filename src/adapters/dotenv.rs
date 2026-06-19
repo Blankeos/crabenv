@@ -383,6 +383,7 @@ pub fn sources(path: &Path, owner: &Path, kind: SourceKind) -> Result<Vec<VarSou
                 scope: Scope::Unknown,
                 kind: kind.clone(),
                 value_type: None,
+                enum_values: None,
                 required: None,
                 default_value: None,
                 description: None,

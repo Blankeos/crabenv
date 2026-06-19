@@ -54,6 +54,7 @@ pub fn schema_sources(path: &Path, owner: &Path) -> Result<Vec<VarSource>> {
             scope: Scope::Private,
             kind: SourceKind::PythonSchema,
             value_type: Some("string".to_string()),
+            enum_values: None,
             required: Some(default_value.is_none()),
             default_value,
             description,

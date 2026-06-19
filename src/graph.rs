@@ -29,6 +29,7 @@ pub fn build_graph(project: &Project) -> Result<EnvGraph> {
             owner: source.owner.clone(),
             scope: Scope::Unknown,
             value_type: None,
+            enum_values: None,
             required: None,
             default_value: None,
             description: None,
@@ -44,6 +45,9 @@ pub fn build_graph(project: &Project) -> Result<EnvGraph> {
         }
         if source.value_type.is_some() {
             record.value_type = source.value_type.clone();
+        }
+        if source.enum_values.is_some() {
+            record.enum_values = source.enum_values.clone();
         }
         if source.required.is_some() {
             record.required = source.required;

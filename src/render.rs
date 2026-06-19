@@ -8,7 +8,7 @@ use crate::util::{color, display_rel};
 
 const DESCRIPTION_WIDTH: usize = 48;
 
-pub fn render_list(project: &Project, graph: &EnvGraph) {
+pub fn render_list(project: &Project, graph: &EnvGraph, expand: bool) {
     let grouped = group_records_by_name(graph);
     let app_owner_count = app_owner_count(project);
     let mut rows = grouped
@@ -20,9 +20,9 @@ pub fn render_list(project: &Project, graph: &EnvGraph) {
                 .first()
                 .map(|record| record.name.clone())
                 .unwrap_or_default(),
-            owner: format_group_owner(records, app_owner_count),
+            owner: format_group_owner(records, app_owner_count, expand),
             scope: format_group_scope(records),
-            value_type: format_group_type(records),
+            value_type: format_group_type(records, expand),
             surfaces: format_group_surfaces(records),
             description: format_group_description(records),
         })
@@ -94,6 +94,14 @@ pub fn render_list(project: &Project, graph: &EnvGraph) {
     }
 }
 
+fn format_owner_list(owners: &BTreeSet<PathBuf>) -> String {
+    owners
+        .iter()
+        .map(|owner| display_rel(owner))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn app_owner_count(project: &Project) -> usize {
     project
         .workspaces
@@ -112,7 +120,7 @@ pub fn render_doctor_inventory(project: &Project, graph: &EnvGraph) {
                 .first()
                 .map(|record| record.name.clone())
                 .unwrap_or_default(),
-            owner: format_group_owner(records, app_owner_count),
+            owner: format_group_owner(records, app_owner_count, false),
             surfaces: group_surfaces(records),
         })
         .collect::<Vec<_>>();
@@ -207,7 +215,7 @@ fn group_records_by_name(graph: &EnvGraph) -> BTreeMap<String, Vec<&EnvRecord>> 
     grouped
 }
 
-fn format_group_owner(records: &[&EnvRecord], app_owner_count: usize) -> String {
+fn format_group_owner(records: &[&EnvRecord], app_owner_count: usize, expand: bool) -> String {
     let schema_owners = owners_matching(records, record_has_schema_surface);
     let owners = if schema_owners.is_empty() {
         let template_owners = owners_matching(records, record_has_template_surface);
@@ -221,10 +229,16 @@ fn format_group_owner(records: &[&EnvRecord], app_owner_count: usize) -> String 
     };
 
     if owners.len() > 1 {
-        if owners.len() == app_owner_count {
-            "shared(*)".to_string()
+        let label = if owners.len() == app_owner_count {
+            "shared(all)".to_string()
         } else {
             format!("shared({})", owners.len())
+        };
+
+        if expand {
+            format!("{}: {}", label, format_owner_list(&owners))
+        } else {
+            label
         }
     } else {
         owners
@@ -261,11 +275,11 @@ fn format_group_scope(records: &[&EnvRecord]) -> String {
     }
 }
 
-fn format_group_type(records: &[&EnvRecord]) -> String {
+fn format_group_type(records: &[&EnvRecord], expand: bool) -> String {
     let types = records
         .iter()
         .filter(|record| record_has_schema_surface(record))
-        .map(|record| format_list_type(record))
+        .map(|record| format_list_type(record, expand))
         .filter(|value_type| value_type != "-")
         .collect::<BTreeSet<_>>();
 
@@ -341,10 +355,18 @@ fn record_has_template_surface(record: &EnvRecord) -> bool {
     record.surfaces.contains(&EnvSurface::Template)
 }
 
-fn format_list_type(record: &EnvRecord) -> String {
+fn format_list_type(record: &EnvRecord, expand: bool) -> String {
     let mut value_type = record.value_type.clone().unwrap_or_else(|| "-".to_string());
     if record.required == Some(false) && value_type != "-" {
         value_type.push('?');
+    }
+    if expand {
+        if let Some(values) = &record.enum_values {
+            if !values.is_empty() && value_type.starts_with("enum(") {
+                value_type.push_str(": ");
+                value_type.push_str(&values.join(" | "));
+            }
+        }
     }
     value_type
 }
@@ -518,11 +540,11 @@ mod tests {
     }
 
     #[test]
-    fn group_owner_marks_all_app_owners_as_shared_star() {
+    fn group_owner_marks_all_app_owners_as_shared_all() {
         let records = [record("apps/api"), record("apps/web")];
         let refs = records.iter().collect::<Vec<_>>();
 
-        assert_eq!(format_group_owner(&refs, 2), "shared(*)");
+        assert_eq!(format_group_owner(&refs, 2, false), "shared(all)");
     }
 
     #[test]
@@ -530,7 +552,44 @@ mod tests {
         let records = [record("apps/api"), record("apps/web")];
         let refs = records.iter().collect::<Vec<_>>();
 
-        assert_eq!(format_group_owner(&refs, 3), "shared(2)");
+        assert_eq!(format_group_owner(&refs, 3, false), "shared(2)");
+    }
+
+    #[test]
+    fn group_owner_expands_shared_owners() {
+        let records = [record("apps/api"), record("apps/web")];
+        let refs = records.iter().collect::<Vec<_>>();
+
+        assert_eq!(
+            format_group_owner(&refs, 3, true),
+            "shared(2): apps/api, apps/web"
+        );
+    }
+
+    #[test]
+    fn list_type_expands_enum_values() {
+        let mut record = record("apps/api");
+        record.value_type = Some("enum(3)".to_string());
+        record.enum_values = Some(vec![
+            "development".to_string(),
+            "staging".to_string(),
+            "production".to_string(),
+        ]);
+
+        assert_eq!(
+            format_list_type(&record, true),
+            "enum(3): development | staging | production"
+        );
+    }
+
+    #[test]
+    fn list_type_marks_optional_enum_before_expanded_values() {
+        let mut record = record("apps/api");
+        record.value_type = Some("enum(2)".to_string());
+        record.enum_values = Some(vec!["debug".to_string(), "info".to_string()]);
+        record.required = Some(false);
+
+        assert_eq!(format_list_type(&record, true), "enum(2)?: debug | info");
     }
 
     fn record(owner: &str) -> EnvRecord {
@@ -539,6 +598,7 @@ mod tests {
             owner: PathBuf::from(owner),
             scope: Scope::Private,
             value_type: Some("string".to_string()),
+            enum_values: None,
             required: Some(true),
             default_value: None,
             description: None,

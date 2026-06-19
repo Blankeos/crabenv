@@ -81,6 +81,7 @@ pub fn schema_sources(path: &Path, owner: &Path) -> Result<Vec<VarSource>> {
             scope: Scope::Private,
             kind: SourceKind::RustSchema,
             value_type: Some(value_type_from_rust(&ty).to_string()),
+            enum_values: None,
             required: Some(!is_optional && default_value.is_none() && !attrs.contains("default")),
             default_value,
             description,

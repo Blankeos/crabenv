@@ -118,6 +118,7 @@ pub fn schema_sources(path: &Path, owner: &Path, scope: Scope) -> Result<Vec<Var
             scope: scope.clone(),
             kind: SourceKind::TsSchema,
             value_type: Some(infer_type(expr)),
+            enum_values: extract_enum_values(expr),
             required: Some(!expr.contains(".optional()") && !expr.contains(".default(")),
             default_value: extract_default(expr),
             description,

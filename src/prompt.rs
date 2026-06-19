@@ -404,7 +404,7 @@ impl UpdateContext {
 
 fn format_shared_owner_paths(shared: &[PathBuf], all_owners: &[PathBuf]) -> String {
     if shared.is_empty() || shared.len() == unique_paths(all_owners.to_vec()).len() {
-        "shared(*)".to_string()
+        "shared(all)".to_string()
     } else {
         format!(
             "shared({})",
@@ -422,6 +422,7 @@ fn common_record(records: &[EnvRecord]) -> Option<EnvRecord> {
     Some(EnvRecord {
         scope: common_by(records, |record| &record.scope).unwrap_or(Scope::Unknown),
         value_type: common_by(records, |record| &record.value_type).flatten(),
+        enum_values: common_by(records, |record| &record.enum_values).flatten(),
         required: common_by(records, |record| &record.required).flatten(),
         default_value: common_by(records, |record| &record.default_value).flatten(),
         description: common_by(records, |record| &record.description).flatten(),
@@ -636,7 +637,7 @@ fn unique_paths(mut paths: Vec<PathBuf>) -> Vec<PathBuf> {
 
 fn format_shared_prompt_target(shared: &[PathBuf], apps: &[&Workspace]) -> String {
     if shared.is_empty() || shared.len() == apps.len() {
-        "shared(*)".to_string()
+        "shared(all)".to_string()
     } else {
         format!(
             "shared({})",

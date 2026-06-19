@@ -4,7 +4,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::adapters::{dotenv, python, rust, typescript};
-use crate::cli::{AttachArgs, CopyArgs, DoctorArgs, FormatArgs, InitArgs, MutateArgs, RemoveArgs};
+use crate::cli::{
+    AttachArgs, CopyArgs, DoctorArgs, FormatArgs, InitArgs, ListArgs, MutateArgs, RemoveArgs,
+};
 use crate::copy_plan::{build_copy_plan, build_root_example_plan};
 use crate::discovery::app_workspaces;
 use crate::graph::{build_graph, EnvGraph};
@@ -77,9 +79,9 @@ pub fn run_init(project: &Project, args: InitArgs) -> Result<()> {
     Ok(())
 }
 
-pub fn run_list(project: &Project) -> Result<()> {
+pub fn run_list(project: &Project, args: ListArgs) -> Result<()> {
     let graph = build_graph(project)?;
-    render_list(project, &graph);
+    render_list(project, &graph, args.expand);
     Ok(())
 }
 
@@ -831,7 +833,7 @@ fn format_mutation_target(apps: &[&Workspace], target: &MutationTarget) -> Strin
             .first()
             .map(|app| display_rel(&app.rel))
             .unwrap_or_else(|| "-".to_string()),
-        MutationTarget::Shared(SharedTarget::All) => "shared(*)".to_string(),
+        MutationTarget::Shared(SharedTarget::All) => "shared(all)".to_string(),
         MutationTarget::Shared(SharedTarget::Selected(owners)) => {
             let owners = if owners.is_empty() {
                 apps.iter().map(|app| app.rel.clone()).collect::<Vec<_>>()

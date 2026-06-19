@@ -37,9 +37,9 @@ pub enum Commands {
     #[command(
         visible_alias = "ls",
         about = "List env vars grouped by variable name",
-        long_about = "List env vars from definition surfaces (schema and template), grouped by variable name with owner, scope, type, and surfaces. Local-only values are hidden here and reported by doctor instead. If the same schema-owned variable appears in multiple app owners, crabenv shows it as shared(N)."
+        long_about = "List env vars from definition surfaces (schema and template), grouped by variable name with owner, scope, type, and surfaces. Local-only values are hidden here and reported by doctor instead. If the same schema-owned variable appears in multiple app owners, crabenv shows it as shared(N), or shared(all) when every app owns it. Use --expand to show the app owners behind shared labels and the values behind enum types."
     )]
-    List,
+    List(ListArgs),
     #[command(
         about = "Check env config surfaces for consistency",
         long_about = "Check schema/template drift, missing required local values, monorepo .env placement, and public runtimeEnvStrict mappings. Also prints a full per-variable surfaces checklist including local-only variables."
@@ -100,6 +100,12 @@ pub struct DoctorArgs {
     pub fix: bool,
     #[arg(long, help = "Apply fixes instead of only printing the fix plan")]
     pub yes: bool,
+}
+
+#[derive(Args, Clone)]
+pub struct ListArgs {
+    #[arg(short = 'x', long, help = "Expand shared owner labels and enum values")]
+    pub expand: bool,
 }
 
 #[derive(Args, Clone)]
