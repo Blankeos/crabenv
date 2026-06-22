@@ -165,7 +165,10 @@ fn expand_workspace_pattern(root: &Path, pattern: &str) -> Result<Vec<PathBuf>> 
 }
 
 fn classify_workspace(workspace: &Workspace, rel: &Path) -> WorkspaceKind {
-    if adapters::workspace_has_owned_env_files(workspace) || rel.starts_with("apps") {
+    if rel == Path::new(".")
+        || adapters::workspace_has_owned_env_files(workspace)
+        || rel.starts_with("apps")
+    {
         WorkspaceKind::App
     } else {
         WorkspaceKind::Package

@@ -30,10 +30,10 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     #[command(
-        about = "Show discovered env owners and expected files",
-        long_about = "Show the project mode, app owners, and whether each app has expected schema and template surfaces. With --fix, also runs the doctor fix plan."
+        about = "Initialize env files and schemas for discovered app owners",
+        long_about = "Initialize missing env surfaces for discovered app owners. Existing files are never overwritten. Creates app .env.example files, schema files for TypeScript apps, language-specific schema files for Python/Rust apps, and local/root env files from templates."
     )]
-    Init(InitArgs),
+    Init,
     #[command(
         visible_alias = "ls",
         about = "List env vars grouped by variable name",
@@ -81,17 +81,6 @@ pub enum Commands {
         after_help = "Examples:\n  crabenv remove DATABASE_URL --owner apps/next-web\n  crabenv remove DATABASE_URL --shared\n  crabenv remove DATABASE_URL --shared apps/hono-api apps/next-web\n  crabenv remove NEXT_PUBLIC_API_URL --owner apps/next-web --public"
     )]
     Remove(RemoveArgs),
-}
-
-#[derive(Args)]
-pub struct InitArgs {
-    #[arg(long, help = "Also run doctor fixes after showing discovered files")]
-    pub fix: bool,
-    #[arg(
-        long,
-        help = "Apply fix plans without asking for another confirmation flag"
-    )]
-    pub yes: bool,
 }
 
 #[derive(Args)]

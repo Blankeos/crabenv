@@ -1,12 +1,13 @@
 use anyhow::{anyhow, bail, Context, Result};
 use std::collections::BTreeSet;
 use std::fs;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
+use cliclack::{confirm, intro, outro, outro_cancel};
+
 use crate::adapters::{dotenv, python, rust, typescript};
-use crate::cli::{
-    AttachArgs, CopyArgs, DoctorArgs, FormatArgs, InitArgs, ListArgs, MutateArgs, RemoveArgs,
-};
+use crate::cli::{AttachArgs, CopyArgs, DoctorArgs, FormatArgs, ListArgs, MutateArgs, RemoveArgs};
 use crate::copy_plan::{build_copy_plan, build_root_example_plan};
 use crate::discovery::app_workspaces;
 use crate::graph::{build_graph, EnvGraph};
@@ -17,67 +18,310 @@ use crate::models::{
 use crate::render::{render_doctor_inventory, render_list};
 use crate::util::{color, display_rel, normalize_rel_display, validate_var_name};
 
-pub fn run_init(project: &Project, args: InitArgs) -> Result<()> {
-    println!("crabenv init");
-    println!("root: {}", project.root.display());
+pub fn run_init(project: &Project) -> Result<()> {
+    if should_use_cliclack() {
+        intro("Initialize crabenv")?;
+    } else {
+        println!("crabenv init");
+    }
+    println!("{}  {}", color("Root", "90"), project.root.display());
     println!(
-        "mode: {}",
+        "{}  {}",
+        color("Mode", "90"),
         if project.is_monorepo {
             "monorepo"
         } else {
             "single app"
         }
     );
-    println!();
 
-    for app in app_workspaces(project) {
-        println!("- app: {} ({})", display_rel(&app.rel), app.framework);
+    let apps = app_workspaces(project).collect::<Vec<_>>();
+    if apps.is_empty() {
+        println!();
+        println!("{} no app owners found", color("!", "33"));
         println!(
-            "  .env.example: {}",
-            if dotenv::example_path(app).exists() {
-                "present"
-            } else {
-                "missing"
-            }
+            "hint: add a workspace under apps/ or create an env surface, then rerun crabenv init"
         );
-        if app.framework != "python" {
-            println!(
-                "  env.ts: {}",
-                if typescript::should_use_plain_schema(app) {
-                    "present"
-                } else {
-                    "missing"
-                }
-            );
-            println!(
-                "  env.private.ts: {}",
-                if typescript::private_schema_path(app).exists() {
-                    "present"
-                } else {
-                    "missing"
-                }
-            );
-            println!(
-                "  env.public.ts: {}",
-                if typescript::public_schema_path(app).exists() {
-                    "present"
-                } else {
-                    "missing"
-                }
-            );
-        }
+        init_outro_cancel("Nothing to initialize.")?;
+        return Ok(());
     }
 
-    if args.fix {
-        let doctor_args = DoctorArgs {
-            fix: true,
-            yes: args.yes,
-        };
-        run_doctor(project, doctor_args)?;
+    let mut surface_writes = Vec::<FileWritePlan>::new();
+    for app in &apps {
+        collect_init_app_writes(app, &mut surface_writes)?;
+    }
+    dedupe_file_writes(&mut surface_writes);
+
+    let local_write_labels = planned_local_write_labels(project);
+
+    println!();
+    println!("{}", color("Detected", "1"));
+    for app in &apps {
+        println!(
+            "  {} {}  {}",
+            color("●", "36"),
+            display_rel(&app.rel),
+            color(format!("({})", app.framework), "90")
+        );
+        println!(
+            "    {:<9} {}",
+            color("template", "90"),
+            init_status(&dotenv::example_path(app))
+        );
+        println!("    {:<9} {}", color("schema", "90"), schema_status(app));
+    }
+
+    println!();
+    if surface_writes.is_empty() && local_write_labels.is_empty() {
+        init_outro(format!(
+            "crabenv init: {}",
+            color("already initialized", "32")
+        ))?;
+        return Ok(());
+    }
+
+    println!("{}", color("Plan", "1"));
+    for write in &surface_writes {
+        let path = display_path_from_root(project, &write.path)
+            .display()
+            .to_string();
+        println!("  {} {}", color("create", "32"), color(path, "97"));
+    }
+    for label in &local_write_labels {
+        println!(
+            "  {} {}",
+            color("create", "32"),
+            color(label.display().to_string(), "97")
+        );
+    }
+
+    if !should_use_cliclack() {
+        println!(
+            "{} run crabenv init in an interactive terminal to create these files",
+            color("hint:", "90")
+        );
+        return Ok(());
+    }
+
+    println!();
+    let yes = confirm("Create the planned files?").interact()?;
+    if !yes {
+        init_outro_cancel("Cancelled.")?;
+        return Ok(());
+    }
+
+    for write in &surface_writes {
+        write_init_file(&write)?;
+    }
+    write_init_local_files(project)?;
+
+    init_outro("Initialized crabenv ✓")?;
+
+    Ok(())
+}
+
+fn should_use_cliclack() -> bool {
+    std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
+}
+
+fn init_outro(message: impl ToString) -> Result<()> {
+    let message = message.to_string();
+    if should_use_cliclack() {
+        outro(message)?;
+    } else {
+        println!("{message}");
+    }
+    Ok(())
+}
+
+fn init_outro_cancel(message: impl ToString) -> Result<()> {
+    let message = message.to_string();
+    if should_use_cliclack() {
+        outro_cancel(message)?;
+    } else {
+        println!("{message}");
+    }
+    Ok(())
+}
+
+fn collect_init_app_writes(app: &Workspace, writes: &mut Vec<FileWritePlan>) -> Result<()> {
+    push_missing_file(
+        writes,
+        dotenv::example_path(app),
+        "# Add non-secret example values here. crabenv copy uses this file to create .env.\n",
+    );
+
+    match app.framework.as_str() {
+        "python" => push_missing_file(writes, python_init_schema_path(app), PYTHON_ENV_TEMPLATE),
+        "rust" => push_missing_file(writes, rust::config_path(app), RUST_CONFIG_TEMPLATE),
+        _ => collect_typescript_init_writes(app, writes),
     }
 
     Ok(())
 }
+
+fn collect_typescript_init_writes(app: &Workspace, writes: &mut Vec<FileWritePlan>) {
+    let plain = typescript::plain_schema_path(app);
+    let private = typescript::private_schema_path(app);
+    let public = typescript::public_schema_path(app);
+
+    if plain.exists() {
+        return;
+    }
+
+    push_missing_file(writes, private, TYPESCRIPT_PRIVATE_ENV_TEMPLATE);
+    push_missing_file(writes, public, TYPESCRIPT_PUBLIC_ENV_TEMPLATE);
+}
+
+fn push_missing_file(writes: &mut Vec<FileWritePlan>, path: PathBuf, contents: impl Into<String>) {
+    if !path.exists() {
+        writes.push(FileWritePlan {
+            path,
+            contents: contents.into(),
+        });
+    }
+}
+
+fn dedupe_file_writes(writes: &mut Vec<FileWritePlan>) {
+    let mut seen = BTreeSet::new();
+    writes.retain(|write| seen.insert(write.path.clone()));
+}
+
+fn planned_local_write_labels(project: &Project) -> Vec<PathBuf> {
+    let mut labels = Vec::new();
+    if !project.root.join(".env").exists() {
+        labels.push(PathBuf::from(".env"));
+    }
+    if project.is_monorepo && !project.root.join(".env.example").exists() {
+        labels.push(PathBuf::from(".env.example"));
+    }
+    labels
+}
+
+fn write_init_local_files(project: &Project) -> Result<()> {
+    if !project.root.join(".env").exists() {
+        let plan = build_copy_plan(project, true, false)?;
+        for write in plan.writes {
+            if write.path.exists() {
+                continue;
+            }
+            write_init_file(&write)?;
+        }
+    } else if project.is_monorepo && !project.root.join(".env.example").exists() {
+        if let Some(plan) = build_root_example_plan(project)? {
+            write_init_file(&plan)?;
+        }
+    }
+    Ok(())
+}
+
+fn write_init_file(write: &FileWritePlan) -> Result<()> {
+    if let Some(parent) = write.path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    fs::write(&write.path, &write.contents)
+        .with_context(|| format!("failed to write {}", write.path.display()))?;
+    println!("wrote {}", write.path.display());
+    Ok(())
+}
+
+fn init_status(path: &Path) -> String {
+    if path.exists() {
+        color("present", "32")
+    } else {
+        color("will create", "33")
+    }
+}
+
+fn schema_status(app: &Workspace) -> String {
+    match app.framework.as_str() {
+        "python" => status_for_path(&python_init_schema_path(app), "src/env.py"),
+        "rust" => status_for_path(&rust::config_path(app), "src/config.rs"),
+        _ if typescript::should_use_plain_schema(app) => {
+            format!("plain src/env.ts {}", color("present", "32"))
+        }
+        _ if typescript::private_schema_path(app).exists()
+            || typescript::public_schema_path(app).exists() =>
+        {
+            let private = if typescript::private_schema_path(app).exists() {
+                color("present", "32")
+            } else {
+                color("will create", "33")
+            };
+            let public = if typescript::public_schema_path(app).exists() {
+                color("present", "32")
+            } else {
+                color("will create", "33")
+            };
+            format!("split private {private}, public {public}")
+        }
+        _ => format!(
+            "split private {}, public {}",
+            color("will create", "33"),
+            color("will create", "33")
+        ),
+    }
+}
+
+fn status_for_path(path: &Path, label: &str) -> String {
+    format!(
+        "{label} {}",
+        if path.exists() {
+            color("present", "32")
+        } else {
+            color("will create", "33")
+        }
+    )
+}
+
+fn python_init_schema_path(app: &Workspace) -> PathBuf {
+    python::find_env_file(&app.root).unwrap_or_else(|| app.root.join("src/env.py"))
+}
+
+const TYPESCRIPT_PRIVATE_ENV_TEMPLATE: &str = r#"import { createEnv } from "@t3-oss/env-core";
+import { z } from "zod";
+
+export const privateEnv = createEnv({
+  emptyStringAsUndefined: true,
+  runtimeEnv: process.env,
+  server: {},
+});
+"#;
+
+const TYPESCRIPT_PUBLIC_ENV_TEMPLATE: &str = r#"import { createEnv } from "@t3-oss/env-core";
+import { z } from "zod";
+
+export const publicEnv = createEnv({
+  emptyStringAsUndefined: true,
+  clientPrefix: "PUBLIC_",
+  client: {},
+  runtimeEnvStrict: {},
+});
+"#;
+
+const PYTHON_ENV_TEMPLATE: &str = r#"from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Env(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+
+env = Env()
+"#;
+
+const RUST_CONFIG_TEMPLATE: &str = r#"use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+pub struct Config {}
+
+impl Config {
+    pub fn from_env() -> envy::Result<Self> {
+        envy::from_env::<Self>()
+    }
+}
+"#;
 
 pub fn run_list(project: &Project, args: ListArgs) -> Result<()> {
     let graph = build_graph(project)?;

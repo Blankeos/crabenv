@@ -27,7 +27,7 @@ fn main() -> Result<()> {
     let project = discovery::discover_project(&root)?;
 
     match cli.command {
-        Commands::Init(args) => commands::run_init(&project, args),
+        Commands::Init => commands::run_init(&project),
         Commands::List(args) => commands::run_list(&project, args),
         Commands::Doctor(args) => commands::run_doctor(&project, args),
         Commands::Format(args) => commands::run_format(&project, args),
