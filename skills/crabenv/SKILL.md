@@ -16,8 +16,10 @@ You're currently reading the "skill" / "guide". If you're planning to use the CL
 ## Goals
 
 - [x] Typesafety & Validation
-- [x] Good documentation
-- [x] Seamless local development -> deployment story.
+- [x] Good documentation. Never stale, does what it says.
+- [x] Seamless _local development_ to _deployment_ story.
+- [x] No new config files. Your team doesn't need to install crabenv, it's just manual-crud made automated via CLI.
+- [x] Language-agnostic. No need to learn language-specific configurations for multi-language and monorepos, just use the same CLI commands.
 
 ## Concepts
 

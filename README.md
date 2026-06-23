@@ -1,10 +1,16 @@
-# crabenv
+# 🦀 crabenv
 
 The simplest, opinionated way to keep .env files, schemas, and examples aligned.
 
-crabenv is an **opinionated**, language-agnostic CLI that keeps your environment variables aligned across schema, template, and local files. No new config file required. It validates, copies, and checks for drift so your team doesn't have to.
+`crabenv` is an env var management standard created by [Carlo Taleon](http://carlo.tl) to minimize env var schema + documentation drift in any codebase. If you follow this standard, you'll find it extremely seamless to "develop locally" and "deploy to production" in any platform!
 
-This project will once and for all solve environment variables typesafe schema definition and documentation so it will never drift. This CLI only does what you can already do manually. It doesn't introduce any new config files so if your team doesn't want to use crabenv, it'll be completely fine!
+## Why use it
+
+- [x] Typesafety & Validation
+- [x] Good documentation. Never stale, does what it says.
+- [x] Seamless _local development_ to _deployment_ story.
+- [x] No new config files. Your team doesn't need to install crabenv, it's just manual-crud made automated via CLI.
+- [x] Language-agnostic. No need to learn language-specific configurations for multi-language and monorepos, just use the same CLI commands.
 
 ## Installation
 
@@ -17,15 +23,56 @@ cargo install crabenv             # or cargo (build from source)
 curl -sSL https://raw.githubusercontent.com/Blankeos/crabenv/main/install.sh | sh # or linux/macos (via curl)
 ```
 
-### 📁 Languages supported:
+## Quickstart
 
-- [x] TypeScript/Javascript and Monorepos (includes React, Solid, Vue, Svelte, Vite, NextJS, ReactNative, Backends, and Cloudflare apps)
-- [x] Python
-- [x] Rust
-- [x] Flutter
+> 💡 Before anything else, read this 1-page concept of the standard [here](https://crabenv.pages.dev/#concepts). Must know **Local (`.env`)**, **Schema (`env.ts`, etc.)**, **Template (`.env.example`)**
+
+1. This command auto-detects your project and creates a Local, Schema, and Template
+
+```sh
+crabenv init
+```
+
+2. Add an env var
+
+```sh
+crabenv add
+◆ Variable name: DATABASE_URL
+◆ Scope: private
+◆ Type: string
+◆ Example Value: $(pwd)/data.db
+◆ Mark as optional: no
+◆ Add? yes
+
+# Notice that Local, Template, and Schema are correctly synced 🎉
+```
+
+3. List your env vars to see if it's used, remove, or update vars
+
+```sh
+crabenv ls
+crabenv remove
+crabenv update
+```
+
+😎 That's it! Now imagine the convenience when...
+
+- A new dev onboards on a new project, they just need to do `crabenv cp` to get a correct `.env` file! It's a better `cp .env.example .env` command!
+- A senior dev wants to deploy a monorepo so what env vars needed for specific apps? Show them all with `crabenv ls`
+- A senior dev wants to reorganize, sort, standardize the structure of env vars? Re-sort them without thinking about it with `crabenv fmt`
+- A senior dev wants to check for any drift? `crabenv doctor`
+
+## 📁 Languages supported:
+
+Regardless of the language or mix of languages in your repositories, you'll be able to use the same commands.
+
+- [x] 💙 TypeScript/Javascript and Monorepos (includes React, Solid, Vue, Svelte, Vite, NextJS, ReactNative, Backends, and Cloudflare apps)
+- [x] 🐍 Python
+- [x] 🦀 Rust
+- [x] 🐦 Flutter
 - [x] More? Request an adapter.
 
-### 🤒 Pains solved:
+<!--### 🤒 Pains solved:
 
 - [x] CRUD and Documentation drift
 - [ ] Deployment/sink drift via explicit managed blocks, not arbitrary file inference
@@ -37,33 +84,21 @@ curl -sSL https://raw.githubusercontent.com/Blankeos/crabenv/main/install.sh | s
   - [x] Use templating patterns like `"RSA_KEY=$(openssl  rand -base64 32)` - the crabenv copy
 - [x] ~Rotating??~ Kinda impossible actually.
 - [ ] Cloudflare `.dev.vars` guidance/docs
-
-## Philosophy
-
-- No new config file. Your team doesn't have to install crabenv, but it helps a lot! The CLI just abstracts the manual maintenance.
-- Env config is synced across **surfaces**:
-  - 1. **Schema** - The validator language-specific schema. Multiple based on apps. i.e. `env.ts`, `env.private.ts`, `env.public.ts`, `config.rs`, `config.dart`.
-  - 2. **Template (`.env.example`)** - Safe example/template values for env values. Multiple based on apps.
-  - 3. **Local (`.env`)** - The actual local runtime values/secrets. 1 only.
-  - 4. **Sinks** - Reserved for future explicit integrations. crabenv does not currently infer or rewrite arbitrary deployment files.
-  - More? Make an adapter
-- Packages in monorepos don't have .env.
+-->
 
 ## Agent skill
 
-Install the crabenv skill for coding agents with:
+Completely optional, but in case you want your agent to be autonomous when adding new env vars... Install the crabenv skill for coding agents with:
 
 ```sh
 npx skills add blankeos/crabenv
 ```
 
-This installs the `crabenv` agent skill from `skills/crabenv`, including language-specific references for TypeScript/JavaScript, Python, Rust, and Flutter/Dart.
-
-## Usage
+## Useful commands you should know
 
 ```sh
 crabenv init
-crabenv copy         # or crabenv cp.
+crabenv copy         # or crabenv cp. (It's a better `cp .env.example .env` command)
 crabenv doctor       # It's a checklist of common mistakes
 crabenv doctor --fix
 
@@ -76,7 +111,7 @@ crabenv remove # Wizard-like experience
 crabenv add {VARIABLE_NAME}
     --shared   # if monorepo, adds it to all apps (also --shared '*')
     --shared apps/api apps/web # add it to selected apps
-    --example  # optional, for .env.example
+    --example  # optional, for .env.example (you can use templating w/ "$(pwd)/data.db")
     --optional # optional, required by default
     --default  # optional
     # Type flags
@@ -98,16 +133,10 @@ crabenv remove {VARIABLE_NAME}
 crabenv update {VARIABLE_NAME} # Same flags as add
 ```
 
-## Current CLI
+## Documentation
 
-This repo currently has a first Rust CLI implementation that works against the sample projects in `_checks/sample-projects`.
+https://crabenv.pages.dev
 
-```sh
-crabenv --root _checks/sample-projects/basic-npm list
-crabenv --root _checks/sample-projects/basic-npm doctor
-crabenv --root _checks/sample-projects/basic-npm copy
+## License
 
-crabenv --root _checks/sample-projects/monorepo doctor --fix --yes
-crabenv --root _checks/sample-projects/monorepo add NEXT_PUBLIC_ANALYTICS_ID --owner apps/next-web --public --example dev --optional
-crabenv --root _checks/sample-projects/monorepo remove NEXT_PUBLIC_ANALYTICS_ID --owner apps/next-web --public
-```
+MIT. Fork it if you want!
