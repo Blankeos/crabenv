@@ -37,7 +37,7 @@ pub enum Commands {
     #[command(
         visible_alias = "ls",
         about = "List env vars grouped by variable name",
-        long_about = "List env vars from definition surfaces (schema and template), grouped by variable name with owner, scope, type, and surfaces. Local-only values are hidden here and reported by doctor instead. If the same schema-owned variable appears in multiple app owners, crabenv shows it as shared(N), or shared(all) when every app owns it. Use --expand to show the app owners behind shared labels and the values behind enum types."
+        long_about = "List env vars from definition surfaces (schema and template), grouped by variable name with owner, scope, type, and surfaces. Managed sink coverage is shown as the sinks surface. Local-only values are hidden here and reported by doctor instead. If the same schema-owned variable appears in multiple app owners, crabenv shows it as shared(N), or shared(all) when every app owns it. Use --expand to show the app owners behind shared labels and the values behind enum types."
     )]
     List(ListArgs),
     #[command(

@@ -363,18 +363,14 @@ pub fn run_doctor(project: &Project, args: DoctorArgs) -> Result<()> {
         }
 
         println!();
-        println!("fix plan:");
-        for fix in &fixes {
-            println!("- {}", describe_fix(fix));
-        }
+        render_fix_plan(&fixes, args.yes);
 
         if !args.yes {
-            println!("rerun with --yes to apply this plan");
             return Ok(());
         }
 
         apply_fixes(project, &fixes)?;
-        println!("applied {} fix(es)", fixes.len());
+        println!("{} applied {} fix(es)", color("✓", "32"), fixes.len());
     }
 
     Ok(())
@@ -416,6 +412,52 @@ fn severity_label(severity: &Severity) -> String {
         Severity::Info => color(label, "36"),
         Severity::Warn => color(label, "33"),
         Severity::Error => color(label, "31"),
+    }
+}
+
+fn render_fix_plan(fixes: &[Fix], apply_now: bool) {
+    println!(
+        "{} {}",
+        color("Fix plan", "1"),
+        color(format!("{} automatic fix(es)", fixes.len()), "90")
+    );
+    for fix in fixes {
+        println!(
+            "  {} {} {}",
+            color("•", fix_accent_color(fix)),
+            color(fix_badge(fix), fix_accent_color(fix)),
+            describe_fix(fix)
+        );
+    }
+
+    if apply_now {
+        println!(
+            "  {} {}",
+            color("→", "32"),
+            color("applying now because --yes was provided", "90")
+        );
+    } else {
+        println!(
+            "  {} {}",
+            color("→", "33"),
+            color("preview only; rerun with --yes to apply", "90")
+        );
+    }
+}
+
+fn fix_badge(fix: &Fix) -> &'static str {
+    match fix {
+        Fix::BackfillExample { .. } => "[template]",
+        Fix::CreateLocalEnv => "[local]",
+        Fix::SyncSinks => "[sinks]",
+    }
+}
+
+fn fix_accent_color(fix: &Fix) -> &'static str {
+    match fix {
+        Fix::BackfillExample { .. } => "36",
+        Fix::CreateLocalEnv => "33",
+        Fix::SyncSinks => "35",
     }
 }
 

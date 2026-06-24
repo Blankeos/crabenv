@@ -23,6 +23,54 @@ pub struct SinkPlan {
     pub writes: Vec<FileWritePlan>,
 }
 
+fn collect_sink_file_surface_sources(
+    project: &Project,
+    graph: &EnvGraph,
+    path: &Path,
+    contents: &str,
+) -> Result<Vec<SinkSurfaceSource>> {
+    let normalized = contents.replace("\r\n", "\n");
+    let lines = normalized.lines().map(str::to_string).collect::<Vec<_>>();
+    let mut sources = Vec::new();
+    let mut index = 0;
+
+    while index < lines.len() {
+        let line = &lines[index];
+        if !line.contains(START_MARKER) {
+            if line.contains(END_MARKER) {
+                bail!(
+                    "{}:{} has crabenv:end without crabenv:start",
+                    path.display(),
+                    index + 1
+                );
+            }
+            index += 1;
+            continue;
+        }
+
+        let directive = parse_directive(project, path, line, index + 1)?;
+        let end_index = find_end_marker(path, &lines, index + 1)?;
+        let location = format!("{}:{}", path.display(), index + 1);
+        for record in selected_schema_records(graph, &directive.owner, directive.scope) {
+            sources.push(SinkSurfaceSource {
+                owner: directive.owner.clone(),
+                name: record.name,
+                location: location.clone(),
+            });
+        }
+        index = end_index + 1;
+    }
+
+    Ok(sources)
+}
+
+#[derive(Clone, Debug)]
+pub struct SinkSurfaceSource {
+    pub owner: PathBuf,
+    pub name: String,
+    pub location: String,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum SinkScope {
     Public,
@@ -108,6 +156,21 @@ pub fn apply_sink_plan(project: &Project, graph: &EnvGraph) -> Result<SinkPlan> 
             .with_context(|| format!("failed to write {}", write.path.display()))?;
     }
     Ok(plan)
+}
+
+pub fn collect_sink_surface_sources(
+    project: &Project,
+    graph: &EnvGraph,
+) -> Result<Vec<SinkSurfaceSource>> {
+    let mut sources = Vec::new();
+    for path in workflow_paths(project)? {
+        let contents = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        sources.extend(collect_sink_file_surface_sources(
+            project, graph, &path, &contents,
+        )?);
+    }
+    Ok(sources)
 }
 
 fn workflow_paths(project: &Project) -> Result<Vec<PathBuf>> {

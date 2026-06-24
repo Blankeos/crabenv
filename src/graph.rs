@@ -4,7 +4,8 @@ use std::path::PathBuf;
 
 use crate::adapters;
 use crate::discovery::app_workspaces;
-use crate::models::{EnvRecord, Project, Scope, SourceKind, VarSource};
+use crate::models::{EnvRecord, EnvSurface, Project, Scope, SourceKind, VarSource};
+use crate::sinks::collect_sink_surface_sources;
 use crate::util::display_path;
 
 pub type EnvGraph = BTreeMap<(PathBuf, String), EnvRecord>;
@@ -92,6 +93,19 @@ pub fn build_graph(project: &Project) -> Result<EnvGraph> {
                     record.sources.insert(source_location);
                 }
             }
+        }
+    }
+
+    for sink_source in collect_sink_surface_sources(project, &graph)? {
+        let key = (sink_source.owner.clone(), sink_source.name.clone());
+        if let Some(record) = graph.get_mut(&key) {
+            record.surfaces.insert(EnvSurface::Sinks);
+            record
+                .surface_sources
+                .entry(EnvSurface::Sinks)
+                .or_default()
+                .insert(sink_source.location.clone());
+            record.sources.insert(sink_source.location);
         }
     }
 

@@ -185,6 +185,43 @@ fn rejects_missing_dest_for_gha_echo() {
 }
 
 #[test]
+fn collects_sink_surface_sources_from_managed_blocks() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    let path = dir.path().join(".github/workflows/deploy.yml");
+    let contents = r#"jobs:
+  build:
+    env:
+      # crabenv:start format=gha-env scope=public owner=apps/web
+      # crabenv:end
+    steps:
+      - run: |
+          # crabenv:start format=gha-echo scope=private owner=apps/web dest=.env.local
+          # crabenv:end
+"#;
+
+    let sources = collect_sink_file_surface_sources(&project, &graph(), &path, contents).unwrap();
+    let names = sources
+        .iter()
+        .map(|source| source.name.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        names,
+        vec![
+            "NEXT_PUBLIC_BASE_ORIGIN",
+            "NEXT_PUBLIC_GOOGLE_MAPS_API_KEY",
+            "AUTH_SECRET",
+        ]
+    );
+    assert!(sources
+        .iter()
+        .all(|source| source.owner == PathBuf::from("apps/web")));
+    assert!(sources[0].location.ends_with(":4"));
+    assert!(sources[2].location.ends_with(":8"));
+}
+
+#[test]
 fn rejects_source_option_for_gha_env() {
     let dir = tempfile::tempdir().unwrap();
     let project = project(dir.path());

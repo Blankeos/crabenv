@@ -9,7 +9,7 @@
 
 - [x] a description system for env vars.. The rule we currently have is that they're stored in the schema files as comments just above the env var definition.
 
-- [ ] data sink template replacer. what will be the syntax pattern?
+- [x] data sink template replacer. what will be the syntax pattern?
 
 - [x] `crabcode ls` In 'shared(2)', maybe an option to expand this shared(2). Like which specific "apps".
 - [x] `crabcode ls` In enum(2), might wanna see the specific enum values.
