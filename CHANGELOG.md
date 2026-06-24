@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.2] - 2026-06-24
+
+### Documentation
+
+- Revamp onboarding docs and sync guide content by @Blankeos
+
+### Features
+
+- Surface managed sink coverage in env listings by @Blankeos
+- Add managed GitHub Actions sink sync support by @Blankeos
+- Initialize missing env surfaces in `init` command by @Blankeos
+- Add expandable output for shared owners and enum values by @Blankeos
+- Allow --shared to target specific app owners by @Blankeos
+
 ## [0.0.1] - 2026-06-18
 
 ### Bug Fixes
