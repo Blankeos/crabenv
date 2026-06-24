@@ -28,7 +28,7 @@ Env Management in production codebases is essentially:
 1. **Local** (`.env`) - Can be absent. Always one.
 2. **Schema** (`env.*.ts`, `env.rs`, `env.py`, `env.dart`, etc.) - Required. These are opinionated names, deal with it 😎
 3. **Template** (`.env.example`) - Required.
-4. **Sinks** (`docker.compose.yml`, `.github/actions/*.yml`, `Dockerfile`, etc.) - Can-be-absent. Can include the subset of envs i.e. `NEXT_PUBLIC_*` vars that are essential for builds.
+4. **Sinks** (`.github/workflows/*.yml`, etc.) - Can-be-absent. Explicit managed regions that include the subset of envs, such as public `NEXT_PUBLIC_*` vars, that are essential for builds.
 
 ## Agnostic Rules
 
@@ -83,3 +83,5 @@ Special monorepo/multi-language repo rules:
    ```
 
 > For language-specific rules/examples, visit **Language Guides**.
+
+For implemented sink formats, see [Sinks](./sinks/index.md).

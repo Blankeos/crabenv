@@ -9,10 +9,24 @@ use crate::discovery::app_workspaces;
 use crate::graph::EnvGraph;
 use crate::models::{EnvSurface, Fix, Issue, Project, Severity, WorkspaceKind};
 use crate::ordering::{compare_env_names, sort_env_names};
+use crate::sinks::build_sink_plan;
 use crate::util::display_rel;
 
 pub fn collect_issues(project: &Project, graph: &EnvGraph) -> Result<Vec<Issue>> {
     let mut issues = Vec::new();
+
+    let sink_plan = build_sink_plan(project, graph)?;
+    if sink_plan.changed_block_count > 0 {
+        issues.push(Issue {
+            severity: Severity::Warn,
+            message: format!(
+                "{} managed sink block(s) drifted in {} file(s)",
+                sink_plan.changed_block_count,
+                sink_plan.writes.len()
+            ),
+            fix: Some(Fix::SyncSinks),
+        });
+    }
 
     if project.is_monorepo {
         if !project.root.join(".env").exists() {

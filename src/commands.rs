@@ -16,6 +16,7 @@ use crate::models::{
     EnvRecord, EnvSurface, FileWritePlan, Fix, Project, Scope, Severity, VarMutation, Workspace,
 };
 use crate::render::{render_doctor_inventory, render_list};
+use crate::sinks::apply_sink_plan;
 use crate::util::{color, display_rel, normalize_rel_display, validate_var_name};
 
 pub fn run_init(project: &Project) -> Result<()> {
@@ -734,12 +735,14 @@ fn describe_fix(fix: &Fix) -> String {
             format!("add {name} to {}/.env.example", display_rel(app))
         }
         Fix::CreateLocalEnv => "create/update local .env from .env.example files".to_string(),
+        Fix::SyncSinks => "sync managed sink blocks".to_string(),
     }
 }
 
 fn apply_fixes(project: &Project, fixes: &[Fix]) -> Result<()> {
     let mut should_copy = false;
     let mut should_sync_root_example = false;
+    let mut should_sync_sinks = false;
     for fix in fixes {
         match fix {
             Fix::BackfillExample { app, name } => {
@@ -752,6 +755,17 @@ fn apply_fixes(project: &Project, fixes: &[Fix]) -> Result<()> {
             Fix::CreateLocalEnv => {
                 should_copy = true;
             }
+            Fix::SyncSinks => {
+                should_sync_sinks = true;
+            }
+        }
+    }
+
+    if should_sync_sinks {
+        let graph = build_graph(project)?;
+        let plan = apply_sink_plan(project, &graph)?;
+        if !plan.writes.is_empty() {
+            println!("synced {} sink file(s)", plan.writes.len());
         }
     }
 

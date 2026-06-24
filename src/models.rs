@@ -146,6 +146,7 @@ impl Severity {
 pub enum Fix {
     BackfillExample { app: PathBuf, name: String },
     CreateLocalEnv,
+    SyncSinks,
 }
 
 #[derive(Clone, Debug)]

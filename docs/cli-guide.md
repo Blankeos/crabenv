@@ -11,9 +11,12 @@ Prefer the CLI when it is installed; otherwise apply the docs manually.
 crabenv --help        # inspect current commands/options
 crabenv init          # create/align schema + .env.example
 crabenv copy          # create/update local .env from .env.example
-crabenv doctor        # detect drift and common mistakes
-crabenv doctor --fix  # apply safe fixes
+crabenv doctor        # detect drift, common mistakes, and managed sink drift
+crabenv doctor --fix  # preview safe fixes
+crabenv doctor --fix --yes # apply safe fixes
 ```
+
+GitHub Actions sinks are supported through managed `gha-env` and `gha-echo` blocks. See [Sinks](./sinks/index.md).
 
 CRUD commands (wizard-like when used without args, but unusable for agents):
 

@@ -1,0 +1,30 @@
+name: Deploy fixture
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  next-web:
+    runs-on: ubuntu-latest
+    env:
+      # crabenv:start format=gha-env scope=public owner=apps/next-web
+      NEXT_PUBLIC_API_URL: ${{ vars.NEXT_PUBLIC_API_URL }}
+      NEXT_PUBLIC_APP_URL: ${{ vars.NEXT_PUBLIC_APP_URL }}
+      # crabenv:end
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create env file
+        run: |
+          # crabenv:start format=gha-echo scope=all owner=apps/next-web dest=.env.local
+          echo "AUTH_SECRET=${{ secrets.AUTH_SECRET }}" >> .env.local
+          echo "DATABASE_URL=${{ secrets.DATABASE_URL }}" >> .env.local
+          echo "GITHUB_CLIENT_ID=${{ secrets.GITHUB_CLIENT_ID }}" >> .env.local
+          echo "GITHUB_CLIENT_SECRET=${{ secrets.GITHUB_CLIENT_SECRET }}" >> .env.local
+          echo "NEXT_PUBLIC_API_URL=${{ vars.NEXT_PUBLIC_API_URL }}" >> .env.local
+          echo "NEXT_PUBLIC_APP_URL=${{ vars.NEXT_PUBLIC_APP_URL }}" >> .env.local
+          # crabenv:end
+
+      - run: pnpm --filter next-web build

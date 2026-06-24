@@ -12,6 +12,7 @@ mod models;
 mod ordering;
 mod prompt;
 mod render;
+mod sinks;
 mod util;
 
 use cli::{Cli, Commands};

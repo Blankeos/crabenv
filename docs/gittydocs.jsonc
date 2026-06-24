@@ -29,7 +29,11 @@
     },
     {
       "label": "Sinks",
-      "items": [{ "label": "GitHub Actions", "path": "/sinks/github-actions" }],
+      "items": [
+        { "label": "Overview", "path": "/sinks" },
+        { "label": "gha-env", "path": "/sinks/gha-env" },
+        { "label": "gha-echo", "path": "/sinks/gha-echo" },
+      ],
     },
     {
       "label": "Agents",
