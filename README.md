@@ -62,7 +62,7 @@ crabenv update
 - A senior dev wants to reorganize, sort, standardize the structure of env vars? Re-sort them without thinking about it with `crabenv fmt`
 - A senior dev wants to check for any drift? `crabenv doctor`
 
-## 📁 Languages supported:
+## 📁 Languages supported
 
 Regardless of the language or mix of languages in your repositories, you'll be able to use the same commands.
 
