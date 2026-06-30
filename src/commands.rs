@@ -13,11 +13,24 @@ use crate::discovery::app_workspaces;
 use crate::graph::{build_graph, EnvGraph};
 use crate::issues::collect_issues;
 use crate::models::{
-    EnvRecord, EnvSurface, FileWritePlan, Fix, Project, Scope, Severity, VarMutation, Workspace,
+    EnvRecord, EnvSurface, FileWritePlan, Fix, Issue, Project, Scope, Severity, VarMutation,
+    Workspace,
 };
 use crate::render::{render_doctor_inventory, render_list};
 use crate::sinks::apply_sink_plan;
 use crate::util::{color, display_rel, normalize_rel_display, validate_var_name};
+
+fn add_format_issue(issues: &mut Vec<Issue>, format_write_count: usize) {
+    if format_write_count == 0 {
+        return;
+    }
+
+    issues.push(Issue {
+        severity: Severity::Warn,
+        message: format!("{format_write_count} file(s) need formatting; run crabenv format"),
+        fix: Some(Fix::Format),
+    });
+}
 
 pub fn run_init(project: &Project) -> Result<()> {
     if should_use_cliclack() {
@@ -25,6 +38,7 @@ pub fn run_init(project: &Project) -> Result<()> {
     } else {
         println!("crabenv init");
     }
+
     println!("{}  {}", color("Root", "90"), project.root.display());
     println!(
         "{}  {}",
@@ -331,8 +345,10 @@ pub fn run_list(project: &Project, args: ListArgs) -> Result<()> {
 }
 
 pub fn run_doctor(project: &Project, args: DoctorArgs) -> Result<()> {
+    let format_writes = build_format_plan(project)?;
     let graph = build_graph(project)?;
-    let issues = collect_issues(project, &graph)?;
+    let mut issues = collect_issues(project, &graph)?;
+    add_format_issue(&mut issues, format_writes.len());
     if issues.is_empty() {
         println!("crabenv doctor: {}", color("no issues found", "32"));
     } else {
@@ -449,6 +465,7 @@ fn fix_badge(fix: &Fix) -> &'static str {
     match fix {
         Fix::BackfillExample { .. } => "[template]",
         Fix::CreateLocalEnv => "[local]",
+        Fix::Format => "[format]",
         Fix::SyncSinks => "[sinks]",
     }
 }
@@ -457,6 +474,7 @@ fn fix_accent_color(fix: &Fix) -> &'static str {
     match fix {
         Fix::BackfillExample { .. } => "36",
         Fix::CreateLocalEnv => "33",
+        Fix::Format => "32",
         Fix::SyncSinks => "35",
     }
 }
@@ -777,12 +795,14 @@ fn describe_fix(fix: &Fix) -> String {
             format!("add {name} to {}/.env.example", display_rel(app))
         }
         Fix::CreateLocalEnv => "create/update local .env from .env.example files".to_string(),
+        Fix::Format => "format env files and schema entries".to_string(),
         Fix::SyncSinks => "sync managed sink blocks".to_string(),
     }
 }
 
 fn apply_fixes(project: &Project, fixes: &[Fix]) -> Result<()> {
     let mut should_copy = false;
+    let mut should_format = false;
     let mut should_sync_root_example = false;
     let mut should_sync_sinks = false;
     for fix in fixes {
@@ -796,6 +816,9 @@ fn apply_fixes(project: &Project, fixes: &[Fix]) -> Result<()> {
             }
             Fix::CreateLocalEnv => {
                 should_copy = true;
+            }
+            Fix::Format => {
+                should_format = true;
             }
             Fix::SyncSinks => {
                 should_sync_sinks = true;
@@ -822,6 +845,9 @@ fn apply_fixes(project: &Project, fixes: &[Fix]) -> Result<()> {
         )?;
     } else if should_sync_root_example {
         sync_root_example(project)?;
+    }
+    if should_format {
+        run_format(project, FormatArgs { check: false })?;
     }
     Ok(())
 }
@@ -1163,6 +1189,67 @@ fn is_shared_owner_alias(owner: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
+
+    fn test_project(root: &Path) -> Project {
+        Project {
+            root: root.to_path_buf(),
+            is_monorepo: false,
+            workspaces: vec![Workspace {
+                root: root.to_path_buf(),
+                rel: PathBuf::from("."),
+                kind: crate::models::WorkspaceKind::App,
+                framework: "typescript".to_string(),
+            }],
+        }
+    }
+
+    #[test]
+    fn doctor_adds_fixable_format_issue_when_files_would_change() {
+        let mut issues = Vec::new();
+
+        add_format_issue(&mut issues, 2);
+
+        assert_eq!(issues.len(), 1);
+        assert!(matches!(issues[0].severity, Severity::Warn));
+        assert_eq!(issues[0].fix, Some(Fix::Format));
+        assert_eq!(
+            issues[0].message,
+            "2 file(s) need formatting; run crabenv format"
+        );
+    }
+
+    #[test]
+    fn doctor_format_fix_applies_format_plan() {
+        let tempdir = tempdir().unwrap();
+        let path = tempdir.path().join(".env.example");
+        fs::write(
+            &path,
+            "# ---- apps/web/.env.example ----\nB=2\n# ---- Shared ----\nA=1\n",
+        )
+        .unwrap();
+        let project = test_project(tempdir.path());
+
+        assert_eq!(build_format_plan(&project).unwrap().len(), 1);
+
+        apply_fixes(&project, &[Fix::Format]).unwrap();
+
+        assert!(build_format_plan(&project).unwrap().is_empty());
+    }
+
+    #[test]
+    fn discovered_project_detects_root_example_format_plan() {
+        let tempdir = tempdir().unwrap();
+        fs::write(
+            tempdir.path().join(".env.example"),
+            "# ---- apps/web/.env.example ----\nB=2\n# ---- Shared ----\nA=1\n",
+        )
+        .unwrap();
+        let root = tempdir.path().canonicalize().unwrap();
+        let project = crate::discovery::discover_project(&root).unwrap();
+
+        assert_eq!(build_format_plan(&project).unwrap().len(), 1);
+    }
 
     #[test]
     fn shared_target_from_args_treats_empty_and_star_as_all() {
