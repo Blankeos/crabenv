@@ -4,7 +4,9 @@ use std::fs;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
-use cliclack::{confirm, intro, outro, outro_cancel};
+use cliclack::{
+    confirm, intro, outro, outro_cancel, reset_theme, select, set_theme, Theme, ThemeState,
+};
 
 use crate::adapters::{dotenv, python, rust, typescript};
 use crate::cli::{AttachArgs, CopyArgs, DoctorArgs, FormatArgs, ListArgs, MutateArgs, RemoveArgs};
@@ -16,7 +18,7 @@ use crate::models::{
     EnvRecord, EnvSurface, FileWritePlan, Fix, Issue, Project, Scope, Severity, VarMutation,
     Workspace,
 };
-use crate::render::{render_doctor_inventory, render_list};
+use crate::render::{list_rows, render_doctor_inventory, render_list, ListRow};
 use crate::sinks::apply_sink_plan;
 use crate::util::{color, display_rel, normalize_rel_display, validate_var_name};
 
@@ -340,8 +342,136 @@ impl Config {
 
 pub fn run_list(project: &Project, args: ListArgs) -> Result<()> {
     let graph = build_graph(project)?;
-    render_list(project, &graph, args.expand);
+    let expand = args.expand || !args.compact;
+    if args.print || !should_use_cliclack() {
+        render_list(project, &graph, expand);
+    } else {
+        run_interactive_list(project, &graph, expand)?;
+    }
     Ok(())
+}
+
+fn run_interactive_list(project: &Project, graph: &EnvGraph, expand: bool) -> Result<()> {
+    let rows = list_rows(project, graph, expand);
+    intro(format!("{} variable(s)", rows.len()))?;
+
+    if rows.is_empty() {
+        outro("No schema/template env vars found.")?;
+        return Ok(());
+    }
+
+    set_theme(ListTheme);
+    let selected = select("Search").filter_mode().max_rows(20);
+    let mut prompt = selected;
+    for row in rows {
+        prompt = prompt.item(row.index.clone(), list_search_label(&row), list_hint(&row));
+    }
+    let result = prompt.interact();
+    reset_theme();
+    let _ = result?;
+    outro("Done")?;
+    Ok(())
+}
+
+fn list_label(row: &ListRow) -> String {
+    let description = if row.description == "-" {
+        String::new()
+    } else {
+        format!(" - {}", row.description)
+    };
+    format!("{}. {}{}", row.index, row.name, description)
+}
+
+fn list_search_label(row: &ListRow) -> String {
+    format!("{}\u{1f}{}", list_label(row), list_search_value(row))
+}
+
+fn list_search_value(row: &ListRow) -> String {
+    let name_words = row.name.replace(['_', '-'], " ");
+    format!(
+        "{} {} {} {} {} {} {} {}",
+        row.index,
+        row.name,
+        name_words,
+        row.description,
+        row.owner,
+        row.scope,
+        row.value_type,
+        row.surfaces
+    )
+}
+
+fn list_hint(row: &ListRow) -> String {
+    [
+        ("owner", row.owner.as_str()),
+        ("scope", row.scope.as_str()),
+        ("type", row.value_type.as_str()),
+        ("surfaces", row.surfaces.as_str()),
+    ]
+    .into_iter()
+    .filter(|(_, value)| !value.is_empty() && *value != "-")
+    .map(|(label, value)| format!("- {label}: {value}"))
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
+struct ListTheme;
+
+impl Theme for ListTheme {
+    fn format_select_item(
+        &self,
+        state: &ThemeState,
+        selected: bool,
+        label: &str,
+        hint: &str,
+    ) -> String {
+        match state {
+            ThemeState::Cancel | ThemeState::Submit if !selected => return String::new(),
+            _ => {}
+        }
+
+        let radio = self.radio_symbol(state, selected);
+        let label_style = if selected {
+            self.input_style(state)
+        } else {
+            self.placeholder_style(state)
+        };
+        let display_label = label.split('\u{1f}').next().unwrap_or(label);
+        let mut output = format!(
+            "{}  {} {}\n",
+            self.bar_color(state).apply_to("│"),
+            radio,
+            label_style.apply_to(display_label)
+        );
+
+        if selected
+            && matches!(state, ThemeState::Active | ThemeState::Error(_))
+            && !hint.is_empty()
+        {
+            let hint_style = self.placeholder_style(state);
+            for line in hint.lines() {
+                output.push_str(&format!(
+                    "{}      {}\n",
+                    self.bar_color(state).apply_to("│"),
+                    hint_style.apply_to(line)
+                ));
+            }
+        }
+
+        output
+    }
+
+    fn format_footer(&self, state: &ThemeState) -> String {
+        match state {
+            ThemeState::Active => format!(
+                "{}  {}\n",
+                self.bar_color(state).apply_to("└"),
+                self.placeholder_style(state)
+                    .apply_to("type to search · Enter closes")
+            ),
+            _ => Theme::format_footer_with_message(self, state, ""),
+        }
+    }
 }
 
 pub fn run_doctor(project: &Project, args: DoctorArgs) -> Result<()> {

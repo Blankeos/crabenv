@@ -41,7 +41,7 @@ const references: Reference[] = [
     description: "String.fromEnvironment conventions, dart-define files, and public-only mobile env rules.",
   },
   {
-    source: "docs/sinks/github-actions.md",
+    source: "docs/sinks/index.md",
     target: "github-actions.md",
     title: "GitHub Actions Sinks",
     description: "Deployment sink notes for GitHub Actions.",

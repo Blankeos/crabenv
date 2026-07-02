@@ -8,7 +8,7 @@ use crate::util::{color, display_rel};
 
 const DESCRIPTION_WIDTH: usize = 48;
 
-pub fn render_list(project: &Project, graph: &EnvGraph, expand: bool) {
+pub fn list_rows(project: &Project, graph: &EnvGraph, expand: bool) -> Vec<ListRow> {
     let grouped = group_records_by_name(graph);
     let app_owner_count = app_owner_count(project);
     let mut rows = grouped
@@ -34,6 +34,12 @@ pub fn render_list(project: &Project, graph: &EnvGraph, expand: bool) {
     for (index, row) in rows.iter_mut().enumerate() {
         row.index = (index + 1).to_string();
     }
+
+    rows
+}
+
+pub fn render_list(project: &Project, graph: &EnvGraph, expand: bool) {
+    let rows = list_rows(project, graph, expand);
     let widths = ListWidths::from_rows(&rows);
 
     println!("{} variable(s)", rows.len());
@@ -371,14 +377,14 @@ fn format_list_type(record: &EnvRecord, expand: bool) -> String {
     value_type
 }
 
-struct ListRow {
-    index: String,
-    name: String,
-    owner: String,
-    scope: String,
-    value_type: String,
-    surfaces: String,
-    description: String,
+pub struct ListRow {
+    pub index: String,
+    pub name: String,
+    pub owner: String,
+    pub scope: String,
+    pub value_type: String,
+    pub surfaces: String,
+    pub description: String,
 }
 
 struct ListWidths {

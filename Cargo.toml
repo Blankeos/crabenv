@@ -21,8 +21,6 @@ include = [
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
-# Local path uses the vendored fork while developing.
-# When published, Cargo strips `path` and resolves this to the crates.io package `cliclack-crabenv`.
 cliclack = "0.5"
 ctrlc = "3"
 colored = "2"

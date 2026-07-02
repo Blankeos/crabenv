@@ -37,7 +37,7 @@ pub enum Commands {
     #[command(
         visible_alias = "ls",
         about = "List env vars grouped by variable name",
-        long_about = "List env vars from definition surfaces (schema and template), grouped by variable name with owner, scope, type, and surfaces. Managed sink coverage is shown as the sinks surface. Local-only values are hidden here and reported by doctor instead. If the same schema-owned variable appears in multiple app owners, crabenv shows it as shared(N), or shared(all) when every app owns it. Use --expand to show the app owners behind shared labels and the values behind enum types."
+        long_about = "List env vars from definition surfaces (schema and template). In an interactive terminal this opens a searchable list with focused details for the highlighted variable. Use -p/--print for the plain table, especially in scripts and AI agents. Managed sink coverage is shown as the sinks surface. Local-only values are hidden here and reported by doctor instead. Shared owner labels and enum values are expanded by default; use --compact for the shorter form."
     )]
     List(ListArgs),
     #[command(
@@ -93,8 +93,18 @@ pub struct DoctorArgs {
 
 #[derive(Args, Clone)]
 pub struct ListArgs {
-    #[arg(short = 'x', long, help = "Expand shared owner labels and enum values")]
+    #[arg(
+        short = 'p',
+        long,
+        help = "Print the plain table instead of opening the interactive list"
+    )]
+    pub print: bool,
+
+    #[arg(short = 'x', long, hide = true)]
     pub expand: bool,
+
+    #[arg(long, help = "Use compact shared owner labels and enum types")]
+    pub compact: bool,
 }
 
 #[derive(Args, Clone)]

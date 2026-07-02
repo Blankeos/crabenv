@@ -103,7 +103,8 @@ crabenv doctor       # It's a checklist of common mistakes
 crabenv doctor --fix
 
 # CRUD
-crabenv list   # Lists variables
+crabenv list   # Searchable interactive env inventory, expanded by default
+crabenv ls -p  # Print env inventory for scripts/agents
 crabenv add    # Wizard-like experience
 crabenv update # Wizard-like experience
 crabenv remove # Wizard-like experience

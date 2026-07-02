@@ -1,56 +1,51 @@
 # GitHub Actions Sinks
 
-> Implemented deployment sink notes for GitHub Actions.
+> Deployment sink notes for GitHub Actions.
 
-Supported formats: `gha-env`, `gha-echo`.
+Sinks are optional deployment/build files that need crabenv variables.
 
-## `gha-env`
+crabenv only manages explicit marker blocks:
 
-Use inside a workflow/job/step `env:` map.
-
-```yaml
-jobs:
-  build-web:
-    env:
-      # crabenv:start format=gha-env scope=public owner=apps/web
-      NEXT_PUBLIC_BASE_ORIGIN: ${{ vars.NEXT_PUBLIC_BASE_ORIGIN }}
-      NEXT_PUBLIC_GOOGLE_MAPS_API_KEY: ${{ vars.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY }}
-      # crabenv:end
+```txt
+# crabenv:start format=<format> scope=<scope> owner=<owner>
+# crabenv:end
 ```
 
-Rules:
+Everything outside the markers is yours. Inside the markers, crabenv controls the variable list, ordering, and output shape for the selected format.
 
-- No `source` or `dest` option.
-- Public vars default to `${{ vars.NAME }}`.
-- Private vars default to `${{ secrets.NAME }}`.
+## Supported formats
 
-## `gha-echo`
+| Format                      | File type                          | Output                                          |
+| --------------------------- | ---------------------------------- | ----------------------------------------------- |
+| [`gha-env`](./gha-env.md)   | `.github/workflows/*.yml`, `.yaml` | GitHub Actions `env:` map entries               |
+| [`gha-echo`](./gha-echo.md) | `.github/workflows/*.yml`, `.yaml` | shell `echo` lines that append to a dotenv file |
 
-Use inside a `run: |` block to append variables to a dotenv file.
+> [Request here](https://github.com/Blankeos/crabenv/issues/new) if you think a new format is necessary.
 
-```yaml
-steps:
-  - name: Create env file
-    run: |
-      # crabenv:start format=gha-echo scope=all owner=apps/web dest=.env.local
-      echo "MYSQL_DB_URL=${{ secrets.MYSQL_DB_URL }}" >> .env.local
-      echo "NEXT_PUBLIC_BASE_ORIGIN=${{ vars.NEXT_PUBLIC_BASE_ORIGIN }}" >> .env.local
-      # crabenv:end
-```
+## Marker fields
 
-Rules:
-
-- `scope=public`, `scope=private`, or `scope=all`.
-- `dest=<dotenv path>` is required.
-- Public vars default to `${{ vars.NAME }}`.
-- Private vars default to `${{ secrets.NAME }}`.
+| Field    | Required | Meaning                                                |
+| -------- | -------- | ------------------------------------------------------ |
+| `format` | yes      | Sink renderer, for example `gha-env` or `gha-echo`.    |
+| `scope`  | yes      | `public`, `private`, or `all`.                         |
+| `owner`  | yes      | One app/workspace path, for example `apps/web` or `.`. |
 
 ## Sync
 
 ```sh
-crabenv doctor
-crabenv doctor --fix
-crabenv doctor --fix --yes
+crabenv doctor              # report sink drift
+crabenv doctor --fix        # preview fix plan
+crabenv doctor --fix --yes  # rewrite managed sink blocks
 ```
 
-crabenv only rewrites text between the managed markers. Existing generated lines that use `${{ vars.NAME }}` or `${{ secrets.NAME }}` preserve that namespace choice for the same variable.
+`crabenv format` / `crabenv fmt` does not rewrite sinks.
+
+## Rules
+
+- Sinks are opt-in. crabenv never infers variables from arbitrary deployment files.
+- `format`, `scope`, and `owner` are required.
+- Unknown options fail closed.
+- Supported GitHub Actions sinks scan `.github/workflows/*.yml` and `.github/workflows/*.yaml`.
+- Generated names come from schema variables for the selected owner/scope.
+- Entries are sorted with crabenv's deterministic env ordering.
+- If an existing generated line uses `${{ vars.NAME }}` or `${{ secrets.NAME }}`, crabenv preserves that GitHub namespace choice for that variable.
