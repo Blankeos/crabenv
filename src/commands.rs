@@ -18,7 +18,9 @@ use crate::models::{
     EnvRecord, EnvSurface, FileWritePlan, Fix, Issue, Project, Scope, Severity, VarMutation,
     Workspace,
 };
-use crate::render::{list_rows, render_doctor_inventory, render_list, ListRow};
+use crate::render::{
+    format_list_detail, list_rows, render_doctor_inventory, render_list, render_list_json, ListRow,
+};
 use crate::sinks::apply_sink_plan;
 use crate::util::{color, display_rel, normalize_rel_display, validate_var_name};
 
@@ -343,8 +345,15 @@ impl Config {
 pub fn run_list(project: &Project, args: ListArgs) -> Result<()> {
     let graph = build_graph(project)?;
     let expand = args.expand || !args.compact;
+    if args.json && !args.print {
+        anyhow::bail!("crabenv ls --json is only valid with -p/--print");
+    }
     if args.print || !should_use_cliclack() {
-        render_list(project, &graph, expand);
+        if args.json {
+            render_list_json(project, &graph, expand)?;
+        } else {
+            render_list(project, &graph, expand);
+        }
     } else {
         run_interactive_list(project, &graph, expand)?;
     }
@@ -374,10 +383,11 @@ fn run_interactive_list(project: &Project, graph: &EnvGraph, expand: bool) -> Re
 }
 
 fn list_label(row: &ListRow) -> String {
-    let description = if row.description == "-" {
+    let detail = format_list_detail(row);
+    let description = if detail == "-" {
         String::new()
     } else {
-        format!(" - {}", row.description)
+        format!(" - {detail}")
     };
     format!("{}. {}{}", row.index, row.name, description)
 }
@@ -389,11 +399,12 @@ fn list_search_label(row: &ListRow) -> String {
 fn list_search_value(row: &ListRow) -> String {
     let name_words = row.name.replace(['_', '-'], " ");
     format!(
-        "{} {} {} {} {} {} {} {}",
+        "{} {} {} {} {} {} {} {} {}",
         row.index,
         row.name,
         name_words,
         row.description,
+        row.example,
         row.owner,
         row.scope,
         row.value_type,
@@ -406,6 +417,7 @@ fn list_hint(row: &ListRow) -> String {
         ("owner", row.owner.as_str()),
         ("scope", row.scope.as_str()),
         ("type", row.value_type.as_str()),
+        ("example", row.example.as_str()),
         ("surfaces", row.surfaces.as_str()),
     ]
     .into_iter()
@@ -773,7 +785,13 @@ pub fn run_add_or_update(project: &Project, args: MutateArgs, update: bool) -> R
                     )
                 })?;
 
-            if let Some(example) = args.example.as_deref() {
+            if args.optional {
+                dotenv::upsert_commented_example(
+                    &dotenv::example_path(app),
+                    variable,
+                    args.example.as_deref().unwrap_or(""),
+                )?;
+            } else if let Some(example) = args.example.as_deref() {
                 dotenv::upsert_example(&dotenv::example_path(app), variable, example)?;
             }
 
@@ -800,17 +818,13 @@ pub fn run_add_or_update(project: &Project, args: MutateArgs, update: bool) -> R
         } else {
             Scope::Private
         };
-        let env_value = args
-            .example
-            .clone()
-            .or_else(|| args.default_value.clone())
-            .unwrap_or_default();
+        let env_value = args.example.clone().unwrap_or_default();
         let mutation = VarMutation {
             variable: variable.to_string(),
             ..VarMutation::from(&args)
         };
 
-        dotenv::upsert_example(&dotenv::example_path(app), variable, &env_value)?;
+        upsert_mutation_example(&dotenv::example_path(app), variable, &mutation, &env_value)?;
 
         if app.framework == "python" {
             python::upsert_schema(app, &mutation)?;
@@ -836,6 +850,19 @@ pub fn run_add_or_update(project: &Project, args: MutateArgs, update: bool) -> R
     format_project_after_mutation(project)?;
 
     Ok(())
+}
+
+fn upsert_mutation_example(
+    path: &Path,
+    variable: &str,
+    mutation: &VarMutation,
+    value: &str,
+) -> Result<()> {
+    if mutation.optional {
+        dotenv::upsert_commented_example(path, variable, value)
+    } else {
+        dotenv::upsert_example(path, variable, value)
+    }
 }
 
 fn has_update_edit_flags(args: &MutateArgs) -> bool {
@@ -1003,6 +1030,7 @@ pub fn run_remove(project: &Project, args: RemoveArgs) -> Result<()> {
         .collect::<Vec<_>>();
     print_mutation_result("removed", variable, &apps, &selection.target);
     sync_root_example(project)?;
+    format_project_after_mutation(project)?;
     Ok(())
 }
 
@@ -1085,6 +1113,7 @@ fn describe_fix(fix: &Fix) -> String {
 }
 
 fn apply_fixes(project: &Project, fixes: &[Fix]) -> Result<()> {
+    let graph = build_graph(project)?;
     let mut should_copy = false;
     let mut should_format = false;
     let mut should_sync_root_example = false;
@@ -1095,7 +1124,23 @@ fn apply_fixes(project: &Project, fixes: &[Fix]) -> Result<()> {
                 let workspace = app_workspaces(project)
                     .find(|workspace| workspace.rel == *app)
                     .ok_or_else(|| anyhow!("unknown app {}", app.display()))?;
-                dotenv::upsert_example(&dotenv::example_path(workspace), name, "")?;
+                let record = graph.get(&(app.clone(), name.clone()));
+                let backfill_value = record
+                    .and_then(|record| record.example_value.clone())
+                    .unwrap_or_default();
+                if record.is_some_and(|record| record.required == Some(false)) {
+                    dotenv::upsert_commented_example(
+                        &dotenv::example_path(workspace),
+                        name,
+                        &backfill_value,
+                    )?;
+                } else {
+                    dotenv::upsert_example(
+                        &dotenv::example_path(workspace),
+                        name,
+                        &backfill_value,
+                    )?;
+                }
                 should_sync_root_example = true;
             }
             Fix::CreateLocalEnv => {
@@ -1111,7 +1156,6 @@ fn apply_fixes(project: &Project, fixes: &[Fix]) -> Result<()> {
     }
 
     if should_sync_sinks {
-        let graph = build_graph(project)?;
         let plan = apply_sink_plan(project, &graph)?;
         if !plan.writes.is_empty() {
             println!("synced {} sink file(s)", plan.writes.len());
@@ -1508,6 +1552,15 @@ mod tests {
         }
     }
 
+    fn remove_args(variable: &str) -> RemoveArgs {
+        RemoveArgs {
+            variable: Some(variable.to_string()),
+            owner: None,
+            shared: None,
+            public: false,
+        }
+    }
+
     fn write_typescript_project(root: &Path) {
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(
@@ -1601,6 +1654,57 @@ export const privateEnv = createEnv({
     }
 
     #[test]
+    fn doctor_backfill_optional_defaults_as_commented_empty_template_entries() {
+        let tempdir = tempdir().unwrap();
+        fs::create_dir_all(tempdir.path().join("src")).unwrap();
+        fs::write(
+            tempdir.path().join("package.json"),
+            r#"{"dependencies":{"zod":"latest"}}"#,
+        )
+        .unwrap();
+        fs::write(tempdir.path().join(".env.example"), "").unwrap();
+        fs::write(
+            tempdir.path().join("src/env.private.ts"),
+            r#"import { createEnv } from "@t3-oss/env-core";
+import { z } from "zod";
+
+export const privateEnv = createEnv({
+  runtimeEnv: process.env,
+  server: {
+    NODE_ENV: z.enum(["development", "production"]).default("development"),
+    PORT: z.coerce.number().default(3000),
+  },
+});
+"#,
+        )
+        .unwrap();
+        let project = test_project(tempdir.path());
+
+        apply_fixes(
+            &project,
+            &[
+                Fix::BackfillExample {
+                    app: PathBuf::from("."),
+                    name: "NODE_ENV".to_string(),
+                },
+                Fix::BackfillExample {
+                    app: PathBuf::from("."),
+                    name: "PORT".to_string(),
+                },
+            ],
+        )
+        .unwrap();
+
+        let example = fs::read_to_string(tempdir.path().join(".env.example")).unwrap();
+        assert!(example.contains("# NODE_ENV="));
+        assert!(example.contains("# PORT="));
+        assert!(!example.contains("NODE_ENV=development"));
+        assert!(!example.contains("PORT=3000"));
+        assert!(!example.contains("NODE_ENV=\"\""));
+        assert!(!example.contains("PORT=\"\""));
+    }
+
+    #[test]
     fn add_formats_schema_and_template_immediately() {
         let tempdir = tempdir().unwrap();
         fs::create_dir_all(tempdir.path().join("src")).unwrap();
@@ -1658,6 +1762,97 @@ export const privateEnv = createEnv({
     RESEND_API_KEY: z.string(),
   },"#
         ));
+    }
+
+    #[test]
+    fn remove_formats_schema_and_template_immediately() {
+        let tempdir = tempdir().unwrap();
+        fs::create_dir_all(tempdir.path().join("src")).unwrap();
+        fs::write(
+            tempdir.path().join("package.json"),
+            r#"{"dependencies":{"zod":"latest"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            tempdir.path().join(".env.example"),
+            "# SENTRY_DSN=dsn\nDATABASE_URL=file:./local.db\nNODE_ENV=development\n",
+        )
+        .unwrap();
+        fs::write(
+            tempdir.path().join("src/env.private.ts"),
+            r#"import { createEnv } from "@t3-oss/env-core";
+import { z } from "zod";
+
+export const privateEnv = createEnv({
+  runtimeEnv: process.env,
+  server: {
+    SENTRY_DSN: z.string().optional(),
+    DATABASE_URL: z.string(),
+    NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  },
+});
+"#,
+        )
+        .unwrap();
+        let project = test_project(tempdir.path());
+
+        run_remove(&project, remove_args("SENTRY_DSN")).unwrap();
+
+        assert!(build_format_plan(&project).unwrap().is_empty());
+        let schema = fs::read_to_string(tempdir.path().join("src/env.private.ts")).unwrap();
+        assert!(schema.contains(
+            r#"  server: {
+    NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+
+    DATABASE_URL: z.string(),
+  },"#
+        ));
+        let example = fs::read_to_string(tempdir.path().join(".env.example")).unwrap();
+        assert_eq!(
+            example,
+            "NODE_ENV=development\n\nDATABASE_URL=file:./local.db\n"
+        );
+    }
+
+    #[test]
+    fn add_optional_without_example_writes_commented_template_entry() {
+        let tempdir = tempdir().unwrap();
+        write_typescript_project(tempdir.path());
+        let project = test_project(tempdir.path());
+        let mut args = mutate_args("SENTRY_DSN");
+        args.optional = true;
+
+        run_add_or_update(&project, args, false).unwrap();
+
+        let example = fs::read_to_string(tempdir.path().join(".env.example")).unwrap();
+        assert!(example.contains("# SENTRY_DSN="));
+        assert!(!example.contains("\nSENTRY_DSN="));
+
+        let local = fs::read_to_string(tempdir.path().join(".env")).unwrap();
+        assert!(local.contains("# SENTRY_DSN="));
+        assert!(!local.contains("\nSENTRY_DSN="));
+    }
+
+    #[test]
+    fn add_optional_with_example_and_default_writes_commented_example_value() {
+        let tempdir = tempdir().unwrap();
+        write_typescript_project(tempdir.path());
+        let project = test_project(tempdir.path());
+        let mut args = mutate_args("PORT");
+        args.optional = true;
+        args.example = Some("3000".to_string());
+        args.default_value = Some("3000".to_string());
+        args.number = true;
+
+        run_add_or_update(&project, args, false).unwrap();
+
+        let example = fs::read_to_string(tempdir.path().join(".env.example")).unwrap();
+        assert!(example.contains("# PORT=3000"));
+        assert!(!example.contains("\nPORT=3000"));
+
+        let local = fs::read_to_string(tempdir.path().join(".env")).unwrap();
+        assert!(local.contains("# PORT=3000"));
+        assert!(!local.contains("\nPORT=3000"));
     }
 
     #[test]

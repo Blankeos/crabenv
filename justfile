@@ -20,4 +20,4 @@ devdocs:
     bunx gittydocs dev docs
 
 generate-skill:
-    bun scripts/generate-skill.tsx
+    bun scripts/generate-skill.ts

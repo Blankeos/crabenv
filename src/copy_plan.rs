@@ -16,7 +16,7 @@ pub fn build_copy_plan(
     overwrite: bool,
 ) -> Result<CopyPlan> {
     let env_path = project.root.join(".env");
-    let existing_entries = dotenv::parse_file(&env_path)?;
+    let existing_entries = dotenv::parse_active_file(&env_path)?;
     let existing = existing_entries
         .iter()
         .map(|entry| (entry.key.clone(), entry.value.clone()))
@@ -26,15 +26,13 @@ pub fn build_copy_plan(
     let sections = example_sections(project)?;
     let documented_names = section_entry_names(&sections);
     let mut env_contents = render_env_contents(project, &sections, &shared_names, |entry| {
-        let value = copy_entry_value(
-            &entry.value,
-            &entry.key,
+        render_copy_entry(
+            entry,
             &existing,
             execute_templates,
             overwrite,
             &project.root,
-        );
-        format!("{}={}", entry.key, dotenv::quote_value(&value))
+        )
     });
     append_local_only_entries(&mut env_contents, &existing_entries, &documented_names);
 
@@ -47,12 +45,56 @@ pub fn build_copy_plan(
         writes.push(FileWritePlan {
             path: root_example_path(project),
             contents: render_env_contents(project, &sections, &shared_names, |entry| {
-                format!("{}={}", entry.key, dotenv::quote_value(&entry.value))
+                render_entry_line(entry, &entry.value, true)
             }),
         });
     }
 
     Ok(CopyPlan { writes })
+}
+
+fn render_copy_entry(
+    entry: &DotenvEntry,
+    existing: &HashMap<String, String>,
+    execute_templates: bool,
+    overwrite: bool,
+    cwd: &Path,
+) -> String {
+    let existing_value = existing.get(&entry.key).filter(|value| !value.is_empty());
+    let value = copy_entry_value(
+        &entry.value,
+        &entry.key,
+        existing,
+        execute_templates,
+        overwrite,
+        cwd,
+    );
+    let should_comment = entry.commented && (overwrite || existing_value.is_none());
+    let rendered = render_assignment(&entry.key, &value, should_comment);
+    if should_comment {
+        format!("# {rendered}")
+    } else {
+        rendered
+    }
+}
+
+fn render_entry_line(entry: &DotenvEntry, value: &str, preserve_commented: bool) -> String {
+    let commented = preserve_commented && entry.commented;
+    let assignment = render_assignment(&entry.key, value, commented);
+    if commented {
+        format!("# {assignment}")
+    } else {
+        assignment
+    }
+}
+
+fn render_assignment(key: &str, value: &str, commented: bool) -> String {
+    let rendered_value = if commented && value.is_empty() {
+        String::new()
+    } else {
+        dotenv::quote_value(value)
+    };
+    format!("{key}={rendered_value}")
 }
 
 pub fn build_root_example_plan(project: &Project) -> Result<Option<FileWritePlan>> {
@@ -65,7 +107,7 @@ pub fn build_root_example_plan(project: &Project) -> Result<Option<FileWritePlan
     Ok(Some(FileWritePlan {
         path: root_example_path(project),
         contents: render_env_contents(project, &sections, &shared_names, |entry| {
-            format!("{}={}", entry.key, dotenv::quote_value(&entry.value))
+            render_entry_line(entry, &entry.value, true)
         }),
     }))
 }
@@ -169,7 +211,7 @@ fn append_local_only_entries(
         .filter(|entry| !documented_names.contains(&entry.key))
         .collect::<Vec<_>>();
     let lines = render_sorted_entries(local_only, &mut |entry| {
-        format!("{}={}", entry.key, dotenv::quote_value(&entry.value))
+        render_entry_line(entry, &entry.value, false)
     });
 
     if lines.is_empty() {
@@ -496,6 +538,62 @@ mod tests {
 
         assert!(env_contents.contains("DATABASE_URL=file:./example.db"));
         assert!(env_contents.contains("# ---- local-only ----\nDEV_DISABLE_EMAILS=true"));
+    }
+
+    #[test]
+    fn copy_preserves_commented_optional_entries_until_local_value_exists() {
+        let tempdir = tempfile::tempdir().unwrap();
+        fs::write(
+            tempdir.path().join(".env.example"),
+            "DATABASE_URL=file:./example.db\n# SENTRY_DSN=\n",
+        )
+        .unwrap();
+
+        let project = Project {
+            root: tempdir.path().to_path_buf(),
+            is_monorepo: false,
+            workspaces: vec![test_workspace(tempdir.path(), ".")],
+        };
+
+        let plan = build_copy_plan(&project, false, false).unwrap();
+        let env_contents = write_contents(&plan, ".env");
+
+        assert!(env_contents.contains("DATABASE_URL=file:./example.db"));
+        assert!(env_contents.contains("# SENTRY_DSN="));
+        assert!(!env_contents.contains("\nSENTRY_DSN="));
+
+        fs::write(tempdir.path().join(".env"), "SENTRY_DSN=local\n").unwrap();
+        let plan = build_copy_plan(&project, false, false).unwrap();
+        let env_contents = write_contents(&plan, ".env");
+
+        assert!(env_contents.contains("SENTRY_DSN=local"));
+        assert!(!env_contents.contains("# SENTRY_DSN"));
+    }
+
+    #[test]
+    fn copy_preserves_duplicate_active_local_only_entries() {
+        let tempdir = tempfile::tempdir().unwrap();
+        fs::write(
+            tempdir.path().join(".env"),
+            "PORT=3000\nPORT=3001\nPORT=3002\n",
+        )
+        .unwrap();
+        fs::write(
+            tempdir.path().join(".env.example"),
+            "DATABASE_URL=file:./db\n",
+        )
+        .unwrap();
+
+        let project = Project {
+            root: tempdir.path().to_path_buf(),
+            is_monorepo: false,
+            workspaces: vec![test_workspace(tempdir.path(), ".")],
+        };
+
+        let plan = build_copy_plan(&project, false, false).unwrap();
+        let env_contents = write_contents(&plan, ".env");
+
+        assert!(env_contents.contains("PORT=3000\nPORT=3001\nPORT=3002"));
     }
 
     fn write_contents<'a>(plan: &'a CopyPlan, name: &str) -> &'a str {

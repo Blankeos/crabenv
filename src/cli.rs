@@ -100,9 +100,13 @@ pub struct ListArgs {
     )]
     pub print: bool,
 
+    #[arg(long, help = "Print compact JSON output; only valid with -p/--print")]
+    pub json: bool,
+
     #[arg(short = 'x', long, hide = true)]
     pub expand: bool,
 
+    #[arg(long, help =
     #[arg(long, help = "Use compact shared owner labels and enum types")]
     pub compact: bool,
 }

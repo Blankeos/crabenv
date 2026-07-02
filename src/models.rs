@@ -116,6 +116,8 @@ pub struct EnvRecord {
 pub struct DotenvEntry {
     pub key: String,
     pub value: String,
+    pub commented: bool,
+    pub quote: Option<char>,
 }
 
 #[derive(Clone, Debug)]

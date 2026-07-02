@@ -101,17 +101,22 @@ pub fn prompt_add_or_update(project: &Project, update: bool) -> Result<MutateArg
         .interact()?;
 
     let default_value = if optional {
-        let mut prompt = input("Default value (leave empty for none)");
-        if let Some(value) = selected_old
+        let old_default = selected_old
             .as_ref()
-            .and_then(|record| record.default_value.as_deref())
-        {
+            .and_then(|record| record.default_value.as_deref());
+        let mut prompt = input(optional_prompt_label(
+            "Default value - runtime fallback when missing from .env",
+            old_default.is_some(),
+        ));
+        if let Some(value) = old_default {
             prompt = prompt.default_input(value);
         } else {
             prompt = prompt.placeholder("optional default");
         }
         let val: String = prompt.required(false).interact()?;
-        if val.trim().is_empty() {
+        if is_clear_value(&val) {
+            None
+        } else if val.trim().is_empty() {
             None
         } else {
             Some(val)
@@ -758,14 +763,19 @@ fn prompt_type_bundle(old_type: Option<&str>) -> Result<(bool, bool, bool, bool,
 }
 
 fn prompt_example(placeholder: &str, old_value: Option<&str>) -> Result<Option<String>> {
-    let mut prompt = input("Example value for .env.example (optional)");
+    let mut prompt = input(optional_prompt_label(
+        "Example value - .env.example",
+        old_value.is_some(),
+    ));
     if let Some(old_value) = old_value {
         prompt = prompt.default_input(old_value);
     } else {
         prompt = prompt.placeholder(placeholder).default_input("");
     }
     let value: String = prompt.required(false).interact()?;
-    if value.trim().is_empty() {
+    if is_clear_value(&value) {
+        Ok(None)
+    } else if value.trim().is_empty() {
         Ok(None)
     } else {
         Ok(Some(value))
@@ -773,7 +783,7 @@ fn prompt_example(placeholder: &str, old_value: Option<&str>) -> Result<Option<S
 }
 
 fn prompt_description(old_value: Option<&str>) -> Result<Option<String>> {
-    let mut prompt = input("Description (optional)");
+    let mut prompt = input(optional_prompt_label("Description", old_value.is_some()));
     if let Some(old_value) = old_value {
         prompt = prompt.default_input(old_value);
     } else {
@@ -782,10 +792,24 @@ fn prompt_description(old_value: Option<&str>) -> Result<Option<String>> {
             .default_input("");
     }
     let value: String = prompt.required(false).interact()?;
-    if value.trim().is_empty() {
+    if is_clear_value(&value) {
+        Ok(None)
+    } else if value.trim().is_empty() {
         Ok(None)
     } else {
         Ok(Some(value))
+    }
+}
+
+fn is_clear_value(value: &str) -> bool {
+    matches!(value.trim(), "!clear" | "!none")
+}
+
+fn optional_prompt_label(label: &str, has_existing_value: bool) -> String {
+    if has_existing_value {
+        format!("{label} (optional, Enter keeps current, !clear for none)")
+    } else {
+        format!("{label} (optional, leave empty for none)")
     }
 }
 

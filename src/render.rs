@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
+use anyhow::Result;
+use serde::Serialize;
+
 use crate::graph::EnvGraph;
 use crate::models::{EnvRecord, EnvSurface, Project, Scope};
 use crate::ordering::compare_env_names;
@@ -25,6 +28,7 @@ pub fn list_rows(project: &Project, graph: &EnvGraph, expand: bool) -> Vec<ListR
             value_type: format_group_type(records, expand),
             surfaces: format_group_surfaces(records),
             description: format_group_description(records),
+            example: format_group_example(records),
         })
         .collect::<Vec<_>>();
 
@@ -36,6 +40,16 @@ pub fn list_rows(project: &Project, graph: &EnvGraph, expand: bool) -> Vec<ListR
     }
 
     rows
+}
+
+pub fn render_list_json(project: &Project, graph: &EnvGraph, expand: bool) -> Result<()> {
+    let rows = list_rows(project, graph, expand)
+        .into_iter()
+        .map(ListJsonRow::from)
+        .collect::<Vec<_>>();
+
+    println!("{}", serde_json::to_string(&rows)?);
+    Ok(())
 }
 
 pub fn render_list(project: &Project, graph: &EnvGraph, expand: bool) {
@@ -62,7 +76,8 @@ pub fn render_list(project: &Project, graph: &EnvGraph, expand: bool) {
     println!("{}", "-".repeat(widths.total()));
 
     for row in rows {
-        let description_lines = wrap_cell(&row.description, widths.description);
+        let detail = format_list_detail(&row);
+        let detail_lines = wrap_cell(&detail, widths.description);
         println!(
             "{:<idx$}  {:<name$}  {:<owner$}  {:<scope$}  {:<type_width$}  {:<surfaces$}  {}",
             row.index,
@@ -71,7 +86,7 @@ pub fn render_list(project: &Project, graph: &EnvGraph, expand: bool) {
             row.scope,
             row.value_type,
             row.surfaces,
-            description_lines.first().map(String::as_str).unwrap_or(""),
+            detail_lines.first().map(String::as_str).unwrap_or(""),
             idx = widths.index,
             name = widths.name,
             owner = widths.owner,
@@ -79,7 +94,7 @@ pub fn render_list(project: &Project, graph: &EnvGraph, expand: bool) {
             type_width = widths.value_type,
             surfaces = widths.surfaces,
         );
-        for line in description_lines.iter().skip(1) {
+        for line in detail_lines.iter().skip(1) {
             println!(
                 "{:<idx$}  {:<name$}  {:<owner$}  {:<scope$}  {:<type_width$}  {:<surfaces$}  {}",
                 "",
@@ -129,6 +144,7 @@ pub fn render_doctor_inventory(project: &Project, graph: &EnvGraph) {
             owner: format_group_owner(records, app_owner_count, false),
             has_definition_surface: group_has_definition_surface(records),
             surfaces: group_surfaces(records),
+            optional: group_is_optional(records),
         })
         .collect::<Vec<_>>();
 
@@ -177,7 +193,7 @@ pub fn render_doctor_inventory(project: &Project, graph: &EnvGraph) {
             row.surfaces.contains(&EnvSurface::Template),
             row.has_definition_surface,
         );
-        let local = required_surface_cell(row.surfaces.contains(&EnvSurface::Local));
+        let local = local_surface_cell(row.surfaces.contains(&EnvSurface::Local), row.optional);
         let sinks = optional_surface_cell(row.surfaces.contains(&EnvSurface::Sinks));
 
         if show_owner {
@@ -336,12 +352,46 @@ fn format_group_description(records: &[&EnvRecord]) -> String {
     }
 }
 
+fn format_group_example(records: &[&EnvRecord]) -> String {
+    let examples = records
+        .iter()
+        .filter(|record| record_has_template_surface(record))
+        .filter_map(|record| record.example_value.as_deref())
+        .map(str::trim)
+        .filter(|example| !example.is_empty())
+        .collect::<BTreeSet<_>>();
+
+    match examples.len() {
+        0 => "-".to_string(),
+        1 => examples.iter().next().unwrap().to_string(),
+        _ => format!(
+            "mixed: {}",
+            examples.into_iter().collect::<Vec<_>>().join(" / ")
+        ),
+    }
+}
+
+pub fn format_list_detail(row: &ListRow) -> String {
+    match (row.description.as_str(), row.example.as_str()) {
+        ("-", "-") => "-".to_string(),
+        (description, "-") => description.to_string(),
+        ("-", example) => format!("- example: {example}"),
+        (description, example) => format!("{description} - example: {example}"),
+    }
+}
+
 fn group_surfaces(records: &[&EnvRecord]) -> BTreeSet<EnvSurface> {
     records
         .iter()
         .flat_map(|record| record.surfaces.iter())
         .copied()
         .collect::<BTreeSet<_>>()
+}
+
+fn group_is_optional(records: &[&EnvRecord]) -> bool {
+    records
+        .iter()
+        .any(|record| record_has_schema_surface(record) && record.required == Some(false))
 }
 
 fn required_surface_cell(checked: bool) -> String {
@@ -357,6 +407,14 @@ fn definition_surface_cell(checked: bool, has_definition_surface: bool) -> Strin
         required_surface_cell(checked)
     } else {
         optional_surface_cell(checked)
+    }
+}
+
+fn local_surface_cell(checked: bool, optional: bool) -> String {
+    if optional {
+        optional_surface_cell(checked)
+    } else {
+        required_surface_cell(checked)
     }
 }
 
@@ -400,6 +458,47 @@ pub struct ListRow {
     pub value_type: String,
     pub surfaces: String,
     pub description: String,
+    pub example: String,
+}
+
+#[derive(Serialize)]
+struct ListJsonRow {
+    name: String,
+    owner: String,
+    scope: String,
+    #[serde(rename = "type")]
+    value_type: String,
+    surfaces: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    example: Option<String>,
+}
+
+impl From<ListRow> for ListJsonRow {
+    fn from(row: ListRow) -> Self {
+        Self {
+            name: row.name,
+            owner: row.owner,
+            scope: row.scope,
+            value_type: row.value_type,
+            surfaces: split_list_cell(&row.surfaces),
+            description: optional_list_cell(row.description),
+            example: optional_list_cell(row.example),
+        }
+    }
+}
+
+fn optional_list_cell(value: String) -> Option<String> {
+    (value != "-").then_some(value)
+}
+
+fn split_list_cell(value: &str) -> Vec<String> {
+    if value == "-" {
+        Vec::new()
+    } else {
+        value.split_whitespace().map(str::to_string).collect()
+    }
 }
 
 struct ListWidths {
@@ -433,7 +532,7 @@ impl ListWidths {
             widths.surfaces = widths.surfaces.max(row.surfaces.len());
             widths.description = widths
                 .description
-                .max(row.description.len().min(DESCRIPTION_WIDTH));
+                .max(format_list_detail(row).len().min(DESCRIPTION_WIDTH));
         }
 
         widths
@@ -505,6 +604,7 @@ struct DoctorInventoryRow {
     owner: String,
     has_definition_surface: bool,
     surfaces: BTreeSet<EnvSurface>,
+    optional: bool,
 }
 
 #[cfg(test)]
@@ -567,6 +667,17 @@ mod tests {
             definition_surface_cell(false, false),
             optional_surface_cell(false)
         );
+    }
+
+    #[test]
+    fn optional_schema_rows_treat_missing_local_as_optional_surface() {
+        let mut record = record(".");
+        record.required = Some(false);
+        let refs = vec![&record];
+
+        assert!(group_is_optional(&refs));
+        assert_eq!(local_surface_cell(false, true), color("[-]", "90"));
+        assert_eq!(local_surface_cell(false, false), color("[ ]", "33"));
     }
 
     #[test]

@@ -11,6 +11,17 @@ pub fn example_path(workspace: &Workspace) -> PathBuf {
     workspace.root.join(".env.example")
 }
 
+fn parse_commented_assignment_key(line: &str) -> Option<String> {
+    let trimmed = line.trim_start();
+    let body = trimmed.strip_prefix('#')?.trim_start();
+    if body.starts_with('#') || body.starts_with("export ") {
+        return None;
+    }
+    let (key, _) = body.split_once('=')?;
+    let key = key.trim();
+    is_valid_var_name(key).then(|| key.to_string())
+}
+
 #[derive(Clone, Debug)]
 struct RawSection {
     header: Option<String>,
@@ -104,7 +115,9 @@ fn parse_section_body(section: RawSection) -> ParsedSection {
     let mut saw_entry_or_loose = false;
 
     for line in section.lines {
-        if let Some(key) = parse_assignment_key(&line) {
+        if let Some(key) =
+            parse_assignment_key(&line).or_else(|| parse_commented_assignment_key(&line))
+        {
             let mut lines = Vec::new();
             if saw_entry_or_loose {
                 lines.append(&mut pending);
@@ -305,6 +318,112 @@ S3_BUCKET=web
 "#
         );
     }
+
+    #[test]
+    fn format_contents_preserves_commented_assignment_duplicates() {
+        let input = r#"# local port options
+# PORT=3000
+# PORT=3001
+DATABASE_URL=file:./db
+# TOKEN=
+"#;
+
+        let formatted = format_contents(input);
+
+        assert_eq!(
+            formatted,
+            r#"# local port options
+# PORT=3000
+# PORT=3001
+
+DATABASE_URL=file:./db
+
+# TOKEN=
+"#
+        );
+    }
+
+    #[test]
+    fn parse_file_marks_commented_assignments_without_activating_them() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join(".env.example");
+        fs::write(&path, "# PORT=3000\nTOKEN=secret\n# plain comment\n").unwrap();
+
+        let entries = parse_file(&path).unwrap();
+        let active = parse_active_file(&path).unwrap();
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].key, "PORT");
+        assert!(entries[0].commented);
+        assert_eq!(entries[1].key, "TOKEN");
+        assert!(!entries[1].commented);
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].key, "TOKEN");
+    }
+
+    #[test]
+    fn example_sources_include_commented_assignments_as_template_surface() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let workspace = Workspace {
+            root: tempdir.path().to_path_buf(),
+            rel: PathBuf::from("."),
+            kind: crate::models::WorkspaceKind::App,
+            framework: "typescript".to_string(),
+        };
+        fs::write(
+            tempdir.path().join(".env.example"),
+            "# NODE_ENV=development\n# PORT=3000\n",
+        )
+        .unwrap();
+
+        let sources = collect_example(&workspace).unwrap();
+
+        assert_eq!(sources.len(), 2);
+        assert_eq!(sources[0].name, "NODE_ENV");
+        assert_eq!(sources[0].value.as_deref(), Some("development"));
+        assert_eq!(sources[1].name, "PORT");
+        assert_eq!(sources[1].value.as_deref(), Some("3000"));
+    }
+
+    #[test]
+    fn local_sources_ignore_commented_assignments() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let workspace = Workspace {
+            root: tempdir.path().to_path_buf(),
+            rel: PathBuf::from("."),
+            kind: crate::models::WorkspaceKind::App,
+            framework: "typescript".to_string(),
+        };
+        let project = Project {
+            root: tempdir.path().to_path_buf(),
+            is_monorepo: false,
+            workspaces: vec![workspace.clone()],
+        };
+        fs::write(tempdir.path().join(".env"), "# PORT=3000\nTOKEN=secret\n").unwrap();
+
+        let sources = collect_local(&project, &workspace).unwrap();
+
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].name, "TOKEN");
+    }
+
+    #[test]
+    fn remove_key_removes_commented_assignments_too() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join(".env.example");
+        fs::write(
+            &path,
+            "# PORT=3000\nTOKEN=secret\n# plain comment\n# PORT=3001\n",
+        )
+        .unwrap();
+
+        remove_key(&path, "PORT").unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "TOKEN=secret\n# plain comment\n"
+        );
+    }
 }
 
 pub fn format_contents(contents: &str) -> String {
@@ -376,7 +495,12 @@ pub fn sources(path: &Path, owner: &Path, kind: SourceKind) -> Result<Vec<VarSou
     let contents = fs::read_to_string(path)?;
     let mut out = Vec::new();
     for (index, line) in contents.lines().enumerate() {
-        if let Some((key, value)) = parse_line(line) {
+        let parsed = if matches!(kind, SourceKind::EnvExample) {
+            parse_entry_line(line).map(|entry| (entry.key, entry.value))
+        } else {
+            parse_line(line)
+        };
+        if let Some((key, value)) = parsed {
             out.push(VarSource {
                 name: key,
                 owner: owner.to_path_buf(),
@@ -401,11 +525,33 @@ pub fn parse_file(path: &Path) -> Result<Vec<DotenvEntry>> {
         return Ok(Vec::new());
     }
     let contents = fs::read_to_string(path)?;
-    Ok(contents
-        .lines()
-        .filter_map(parse_line)
-        .map(|(key, value)| DotenvEntry { key, value })
+    Ok(contents.lines().filter_map(parse_entry_line).collect())
+}
+
+pub fn parse_active_file(path: &Path) -> Result<Vec<DotenvEntry>> {
+    Ok(parse_file(path)?
+        .into_iter()
+        .filter(|entry| !entry.commented)
         .collect())
+}
+
+fn parse_entry_line(line: &str) -> Option<DotenvEntry> {
+    if let Some((key, value)) = parse_line(line) {
+        return Some(DotenvEntry {
+            key,
+            value,
+            commented: false,
+        });
+    }
+
+    let trimmed = line.trim_start();
+    let body = trimmed.strip_prefix('#')?.trim_start();
+    let (key, value) = parse_line(body)?;
+    Some(DotenvEntry {
+        key,
+        value,
+        commented: true,
+    })
 }
 
 pub fn parse_line(line: &str) -> Option<(String, String)> {
@@ -429,6 +575,14 @@ pub fn key_set(path: &Path) -> Result<BTreeSet<String>> {
 }
 
 pub fn upsert_example(path: &Path, key: &str, value: &str) -> Result<()> {
+    upsert_example_entry(path, key, value, false)
+}
+
+pub fn upsert_commented_example(path: &Path, key: &str, value: &str) -> Result<()> {
+    upsert_example_entry(path, key, value, true)
+}
+
+fn upsert_example_entry(path: &Path, key: &str, value: &str, commented: bool) -> Result<()> {
     let mut lines = if path.exists() {
         fs::read_to_string(path)?
             .lines()
@@ -438,11 +592,21 @@ pub fn upsert_example(path: &Path, key: &str, value: &str) -> Result<()> {
         Vec::new()
     };
 
-    let replacement = format!("{key}={}", quote_value(value));
+    let rendered_value = if commented && value.is_empty() {
+        String::new()
+    } else {
+        quote_value(value)
+    };
+    let assignment = format!("{key}={rendered_value}");
+    let replacement = if commented {
+        format!("# {assignment}")
+    } else {
+        assignment
+    };
     let mut changed = false;
     for line in &mut lines {
-        if parse_line(line)
-            .map(|(line_key, _)| line_key == key)
+        if parse_entry_line(line)
+            .map(|entry| entry.key == key)
             .unwrap_or(false)
         {
             *line = replacement.clone();
@@ -468,8 +632,8 @@ pub fn remove_key(path: &Path, key: &str) -> Result<()> {
     let lines = fs::read_to_string(path)?
         .lines()
         .filter(|line| {
-            parse_line(line)
-                .map(|(line_key, _)| line_key != key)
+            parse_entry_line(line)
+                .map(|entry| entry.key != key)
                 .unwrap_or(true)
         })
         .map(ToOwned::to_owned)

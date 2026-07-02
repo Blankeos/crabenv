@@ -11,7 +11,8 @@ Prefer the CLI when it is installed; otherwise apply the docs manually.
 crabenv --help        # inspect current commands/options
 crabenv init          # create/align schema + .env.example
 crabenv copy          # create/update local .env from .env.example
-crabenv ls -p         # print expanded env inventory; use this for agents/scripts
+crabenv ls -p         # print expanded env inventory table; use this for agents/scripts
+crabenv ls -p --json  # print compact JSON env inventory for agents/scripts
 crabenv doctor        # detect drift, common mistakes, and managed sink drift
 crabenv doctor --fix  # preview safe fixes
 crabenv doctor --fix --yes # apply safe fixes
@@ -24,9 +25,10 @@ CRUD commands (wizard-like when used without args, but unusable for agents):
 
 ```sh
 crabenv list -p
+crabenv list -p --json
 crabenv add VARIABLE_NAME --example "value" --optional
 crabenv update VARIABLE_NAME
 crabenv remove VARIABLE_NAME
 ```
 
-Agent rule: run `crabenv --help` first, prefer `crabenv ls -p` over interactive `crabenv ls`, use the CLI for routine alignment, then edit files manually only when the CLI cannot express the needed change.
+Agent rule: run `crabenv --help` first, prefer `crabenv ls -p --json` for machine-readable inventory or `crabenv ls -p` for a human-readable table over interactive `crabenv ls`, use the CLI for routine alignment, then edit files manually only when the CLI cannot express the needed change.
