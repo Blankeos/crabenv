@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.3] - 2026-07-02
+
+### Bug Fixes
+
+- Preserve local-only env entries and mark them as non-actionable by @Blankeos
+- Preserve trailing unkeyed schema entries when formatting by @Blankeos
+
+### Features
+
+- Add interactive env list UX with explicit plain output mode by @Blankeos
+- Add format issue detection and format fix execution by @Blankeos
+
 ## [0.0.2] - 2026-06-24
 
 ### Documentation
