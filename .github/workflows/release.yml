@@ -282,11 +282,11 @@ jobs:
           ## Install
 
           ```sh
+          brew install blankeos/tap/crabenv  # or Homebrew
           npm install -g crabenv     # npm
           bun install -g crabenv     # or bun
           cargo binstall crabenv     # or cargo-binstall (prebuilt binary, faster)
           cargo install crabenv      # or cargo (build from source)
-          brew install blankeos/tap/crabenv  # or Homebrew
           curl -sSL https://raw.githubusercontent.com/Blankeos/crabenv/main/install.sh | sh # or linux/macos (via curl)
           ```
 
