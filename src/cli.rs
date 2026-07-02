@@ -70,8 +70,8 @@ pub enum Commands {
     )]
     Attach(AttachArgs),
     #[command(
-        about = "Replace an env var definition for one owner, selected owners, or every app owner with --shared",
-        long_about = "Replace an env var definition by updating the template (.env.example) and schema entry. This has the same flags as add, but communicates intent when changing an existing variable. Use bare --shared or --shared '*' for every app owner; pass app owner paths to --shared for selected owners.",
+        about = "Update selected fields on an existing env var",
+        long_about = "Update an existing env var by changing only the fields you pass. For example, --example only updates .env.example; --description only updates the schema comment while preserving the current type/default. Pass --owner in monorepos, or use bare --shared / --shared '*' for every app owner.",
         after_help = "Examples:\n  crabenv update DATABASE_URL --owner apps/hono-api --example file:./new-local.db\n  crabenv update DATABASE_URL --shared --example file:./new-local.db\n  crabenv update DATABASE_URL --shared apps/hono-api apps/next-web --example file:./new-local.db\n  crabenv update LOG_LEVEL --owner apps/api --enum debug,info,warn,error --default debug"
     )]
     Update(MutateArgs),

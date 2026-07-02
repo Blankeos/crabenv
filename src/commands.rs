@@ -732,32 +732,84 @@ fn apply_file_write(write: &crate::models::FileWritePlan) -> Result<()> {
 
 pub fn run_add_or_update(project: &Project, args: MutateArgs, update: bool) -> Result<()> {
     // If no variable was provided, launch the interactive wizard.
+    let from_cli = args.variable.is_some();
     let args = if args.variable.is_none() {
         crate::prompt::prompt_add_or_update(project, update)?
     } else {
         args
     };
 
+    if update && from_cli && !has_update_edit_flags(&args) {
+        let variable = args.variable.as_deref().unwrap_or("<VAR>");
+        bail!(
+            "crabenv update {variable}: no update flags provided; nothing to update. Pass only the fields you want to edit, e.g. --example VALUE or --description TEXT"
+        );
+    }
+
     let variable = args.variable.as_deref().unwrap_or("");
     validate_var_name(variable)?;
     let selection = select_mutation_apps(project, args.owner.as_deref(), args.shared.as_deref())?;
-
-    let scope = if args.public {
-        Scope::Public
+    let graph = if update {
+        Some(build_graph(project)?)
     } else {
-        Scope::Private
+        None
     };
-    let env_value = args
-        .example
-        .clone()
-        .or_else(|| args.default_value.clone())
-        .unwrap_or_default();
-    let mutation = VarMutation {
-        variable: variable.to_string(),
-        ..VarMutation::from(&args)
-    };
+    let schema_update = update && has_schema_update_edit_flags(&args);
 
     for app in &selection.apps {
+        if update {
+            let record = graph
+                .as_ref()
+                .and_then(|graph| graph.get(&(app.rel.clone(), variable.to_string())))
+                .filter(|record| {
+                    record_has_schema_surface(record) || record_has_template_surface(record)
+                })
+                .ok_or_else(|| {
+                    anyhow!(
+                        "{} was not found in {}; use `crabenv add {}` to create it",
+                        variable,
+                        display_rel(&app.rel),
+                        variable
+                    )
+                })?;
+
+            if let Some(example) = args.example.as_deref() {
+                dotenv::upsert_example(&dotenv::example_path(app), variable, example)?;
+            }
+
+            if !schema_update {
+                continue;
+            }
+
+            let mutation = update_mutation_from_record(record, &args);
+            let scope = update_scope_from_args(record, &args);
+
+            if app.framework == "python" {
+                python::upsert_schema(app, &mutation)?;
+            } else if app.framework == "rust" {
+                rust::upsert_schema(app, &mutation)?;
+            } else {
+                typescript::upsert_schema(app, &mutation, &scope)?;
+            }
+
+            continue;
+        }
+
+        let scope = if args.public {
+            Scope::Public
+        } else {
+            Scope::Private
+        };
+        let env_value = args
+            .example
+            .clone()
+            .or_else(|| args.default_value.clone())
+            .unwrap_or_default();
+        let mutation = VarMutation {
+            variable: variable.to_string(),
+            ..VarMutation::from(&args)
+        };
+
         dotenv::upsert_example(&dotenv::example_path(app), variable, &env_value)?;
 
         if app.framework == "python" {
@@ -784,6 +836,85 @@ pub fn run_add_or_update(project: &Project, args: MutateArgs, update: bool) -> R
     format_project_after_mutation(project)?;
 
     Ok(())
+}
+
+fn has_update_edit_flags(args: &MutateArgs) -> bool {
+    args.example.is_some() || has_schema_update_edit_flags(args)
+}
+
+fn has_schema_update_edit_flags(args: &MutateArgs) -> bool {
+    args.description.is_some()
+        || args.optional
+        || args.default_value.is_some()
+        || args.string
+        || args.numeric
+        || args.number
+        || args.boolean
+        || args.enum_values.is_some()
+        || args.test_regex.is_some()
+        || args.test_regex_message.is_some()
+}
+
+fn update_scope_from_args(record: &EnvRecord, args: &MutateArgs) -> Scope {
+    if args.public {
+        Scope::Public
+    } else if matches!(record.scope, Scope::Public) {
+        Scope::Public
+    } else {
+        Scope::Private
+    }
+}
+
+fn update_mutation_from_record(record: &EnvRecord, args: &MutateArgs) -> VarMutation {
+    let mut mutation = mutation_from_record(record);
+
+    if let Some(description) = &args.description {
+        mutation.description = Some(description.clone());
+    }
+    if args.optional {
+        mutation.optional = true;
+        mutation.default_value = None;
+    }
+    if let Some(default_value) = &args.default_value {
+        mutation.default_value = Some(default_value.clone());
+        mutation.optional = false;
+    }
+
+    if args.string
+        || args.numeric
+        || args.number
+        || args.boolean
+        || args.enum_values.is_some()
+        || args.test_regex.is_some()
+    {
+        mutation.numeric = false;
+        mutation.number = false;
+        mutation.boolean = false;
+        mutation.enum_values = None;
+        mutation.test_regex = None;
+        mutation.test_regex_message = None;
+    }
+
+    if args.numeric {
+        mutation.numeric = true;
+    }
+    if args.number {
+        mutation.number = true;
+    }
+    if args.boolean {
+        mutation.boolean = true;
+    }
+    if let Some(enum_values) = &args.enum_values {
+        mutation.enum_values = Some(enum_values.clone());
+    }
+    if let Some(test_regex) = &args.test_regex {
+        mutation.test_regex = Some(test_regex.clone());
+    }
+    if let Some(test_regex_message) = &args.test_regex_message {
+        mutation.test_regex_message = Some(test_regex_message.clone());
+    }
+
+    mutation
 }
 
 pub fn run_attach(project: &Project, args: AttachArgs) -> Result<()> {
@@ -936,7 +1067,7 @@ fn mutation_from_record(record: &EnvRecord) -> VarMutation {
         numeric: value_type == "regex",
         number: value_type == "number",
         boolean: value_type == "boolean",
-        enum_values: None,
+        enum_values: record.enum_values.as_ref().map(|values| values.join(",")),
         test_regex: None,
         test_regex_message: None,
     }
@@ -1357,6 +1488,50 @@ mod tests {
         }
     }
 
+    fn mutate_args(variable: &str) -> MutateArgs {
+        MutateArgs {
+            variable: Some(variable.to_string()),
+            owner: None,
+            shared: None,
+            public: false,
+            example: None,
+            description: None,
+            optional: false,
+            default_value: None,
+            string: false,
+            numeric: false,
+            number: false,
+            boolean: false,
+            enum_values: None,
+            test_regex: None,
+            test_regex_message: None,
+        }
+    }
+
+    fn write_typescript_project(root: &Path) {
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(
+            root.join("package.json"),
+            r#"{"dependencies":{"zod":"latest"}}"#,
+        )
+        .unwrap();
+        fs::write(root.join(".env.example"), "NODE_ENV=development\n").unwrap();
+        fs::write(
+            root.join("src/env.private.ts"),
+            r#"import { createEnv } from "@t3-oss/env-core";
+import { z } from "zod";
+
+export const privateEnv = createEnv({
+  runtimeEnv: process.env,
+  server: {
+    NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  },
+});
+"#,
+        )
+        .unwrap();
+    }
+
     #[test]
     fn doctor_adds_fixable_format_issue_when_files_would_change() {
         let mut issues = Vec::new();
@@ -1482,6 +1657,65 @@ export const privateEnv = createEnv({
 
     RESEND_API_KEY: z.string(),
   },"#
+        ));
+    }
+
+    #[test]
+    fn update_without_edit_flags_errors_before_writing() {
+        let tempdir = tempdir().unwrap();
+        write_typescript_project(tempdir.path());
+        let project = test_project(tempdir.path());
+        let before_schema = fs::read_to_string(tempdir.path().join("src/env.private.ts")).unwrap();
+        let before_example = fs::read_to_string(tempdir.path().join(".env.example")).unwrap();
+
+        let err = run_add_or_update(&project, mutate_args("NODE_ENV"), true).unwrap_err();
+
+        assert!(err.to_string().contains("no update flags provided"));
+        assert_eq!(
+            fs::read_to_string(tempdir.path().join("src/env.private.ts")).unwrap(),
+            before_schema
+        );
+        assert_eq!(
+            fs::read_to_string(tempdir.path().join(".env.example")).unwrap(),
+            before_example
+        );
+    }
+
+    #[test]
+    fn update_example_only_leaves_schema_unchanged() {
+        let tempdir = tempdir().unwrap();
+        write_typescript_project(tempdir.path());
+        let project = test_project(tempdir.path());
+        let before_schema = fs::read_to_string(tempdir.path().join("src/env.private.ts")).unwrap();
+        let mut args = mutate_args("NODE_ENV");
+        args.example = Some("test".to_string());
+
+        run_add_or_update(&project, args, true).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(tempdir.path().join("src/env.private.ts")).unwrap(),
+            before_schema
+        );
+        assert_eq!(
+            fs::read_to_string(tempdir.path().join(".env.example")).unwrap(),
+            "NODE_ENV=test\n"
+        );
+    }
+
+    #[test]
+    fn update_description_preserves_existing_enum_type() {
+        let tempdir = tempdir().unwrap();
+        write_typescript_project(tempdir.path());
+        let project = test_project(tempdir.path());
+        let mut args = mutate_args("NODE_ENV");
+        args.description = Some("Runtime mode".to_string());
+
+        run_add_or_update(&project, args, true).unwrap();
+
+        let schema = fs::read_to_string(tempdir.path().join("src/env.private.ts")).unwrap();
+        assert!(schema.contains("// Runtime mode"));
+        assert!(schema.contains(
+            r#"NODE_ENV: z.enum(["development", "test", "production"]).default("development")"#
         ));
     }
 
