@@ -106,7 +106,6 @@ pub struct ListArgs {
     #[arg(short = 'x', long, hide = true)]
     pub expand: bool,
 
-    #[arg(long, help =
     #[arg(long, help = "Use compact shared owner labels and enum types")]
     pub compact: bool,
 }

@@ -362,6 +362,24 @@ DATABASE_URL=file:./db
     }
 
     #[test]
+    fn parse_file_preserves_quote_style_and_ignores_inline_comments() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join(".env.example");
+        fs::write(
+            &path,
+            "S3_BUCKET_NAME=\"solid-launch\" # Create this bucket locally\nRAW=value#literal\n",
+        )
+        .unwrap();
+
+        let entries = parse_file(&path).unwrap();
+
+        assert_eq!(entries[0].key, "S3_BUCKET_NAME");
+        assert_eq!(entries[0].value, "solid-launch");
+        assert_eq!(entries[0].quote, Some('"'));
+        assert_eq!(entries[1].value, "value#literal");
+    }
+
+    #[test]
     fn example_sources_include_commented_assignments_as_template_surface() {
         let tempdir = tempfile::tempdir().unwrap();
         let workspace = Workspace {
@@ -536,25 +554,38 @@ pub fn parse_active_file(path: &Path) -> Result<Vec<DotenvEntry>> {
 }
 
 fn parse_entry_line(line: &str) -> Option<DotenvEntry> {
-    if let Some((key, value)) = parse_line(line) {
+    if let Some(parsed) = parse_assignment(line) {
         return Some(DotenvEntry {
-            key,
-            value,
+            key: parsed.key,
+            value: parsed.value,
             commented: false,
+            quote: parsed.quote,
         });
     }
 
     let trimmed = line.trim_start();
     let body = trimmed.strip_prefix('#')?.trim_start();
-    let (key, value) = parse_line(body)?;
+    let parsed = parse_assignment(body)?;
     Some(DotenvEntry {
-        key,
-        value,
+        key: parsed.key,
+        value: parsed.value,
         commented: true,
+        quote: parsed.quote,
     })
 }
 
 pub fn parse_line(line: &str) -> Option<(String, String)> {
+    let parsed = parse_assignment(line)?;
+    Some((parsed.key, parsed.value))
+}
+
+struct ParsedAssignment {
+    key: String,
+    value: String,
+    quote: Option<char>,
+}
+
+fn parse_assignment(line: &str) -> Option<ParsedAssignment> {
     let trimmed = line.trim();
     if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("export ") {
         return None;
@@ -564,7 +595,14 @@ pub fn parse_line(line: &str) -> Option<(String, String)> {
     if !is_valid_var_name(key) {
         return None;
     }
-    Some((key.to_string(), unquote_value(value.trim())))
+    let raw_value = value.trim_start();
+    let value_without_comment = strip_inline_comment(raw_value).trim_end();
+    let (value, quote) = unquote_value(value_without_comment);
+    Some(ParsedAssignment {
+        key: key.to_string(),
+        value,
+        quote,
+    })
 }
 
 pub fn key_set(path: &Path) -> Result<BTreeSet<String>> {
@@ -654,15 +692,62 @@ pub fn quote_value(value: &str) -> String {
     }
 }
 
-fn unquote_value(value: &str) -> String {
+pub fn quote_value_with(value: &str, quote: char) -> String {
+    match quote {
+        '\'' => format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'")),
+        _ => format!("{:?}", value),
+    }
+}
+
+fn strip_inline_comment(value: &str) -> &str {
+    let mut quote = None;
+    let mut escaped = false;
+    let mut previous_was_whitespace = false;
+
+    for (index, ch) in value.char_indices() {
+        if escaped {
+            escaped = false;
+            previous_was_whitespace = ch.is_whitespace();
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            previous_was_whitespace = false;
+            continue;
+        }
+        if let Some(active_quote) = quote {
+            if ch == active_quote {
+                quote = None;
+            }
+            previous_was_whitespace = ch.is_whitespace();
+            continue;
+        }
+        if matches!(ch, '\'' | '"') {
+            quote = Some(ch);
+            previous_was_whitespace = false;
+            continue;
+        }
+        if ch == '#' && (index == 0 || previous_was_whitespace) {
+            return &value[..index];
+        }
+        previous_was_whitespace = ch.is_whitespace();
+    }
+
+    value
+}
+
+fn unquote_value(value: &str) -> (String, Option<char>) {
     let value = value.trim();
     if value.len() >= 2 {
         let bytes = value.as_bytes();
         if (bytes[0] == b'"' && bytes[value.len() - 1] == b'"')
             || (bytes[0] == b'\'' && bytes[value.len() - 1] == b'\'')
         {
-            return value[1..value.len() - 1].to_string();
+            return (
+                value[1..value.len() - 1].to_string(),
+                Some(bytes[0] as char),
+            );
         }
     }
-    value.to_string()
+    (value.to_string(), None)
 }

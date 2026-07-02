@@ -45,7 +45,7 @@ pub fn build_copy_plan(
         writes.push(FileWritePlan {
             path: root_example_path(project),
             contents: render_env_contents(project, &sections, &shared_names, |entry| {
-                render_entry_line(entry, &entry.value, true)
+                render_entry_line(entry, &entry.value, true, entry.quote)
             }),
         });
     }
@@ -70,7 +70,7 @@ fn render_copy_entry(
         cwd,
     );
     let should_comment = entry.commented && (overwrite || existing_value.is_none());
-    let rendered = render_assignment(&entry.key, &value, should_comment);
+    let rendered = render_assignment(&entry.key, &value, should_comment, entry.quote);
     if should_comment {
         format!("# {rendered}")
     } else {
@@ -78,9 +78,14 @@ fn render_copy_entry(
     }
 }
 
-fn render_entry_line(entry: &DotenvEntry, value: &str, preserve_commented: bool) -> String {
+fn render_entry_line(
+    entry: &DotenvEntry,
+    value: &str,
+    preserve_commented: bool,
+    quote: Option<char>,
+) -> String {
     let commented = preserve_commented && entry.commented;
-    let assignment = render_assignment(&entry.key, value, commented);
+    let assignment = render_assignment(&entry.key, value, commented, quote);
     if commented {
         format!("# {assignment}")
     } else {
@@ -88,9 +93,11 @@ fn render_entry_line(entry: &DotenvEntry, value: &str, preserve_commented: bool)
     }
 }
 
-fn render_assignment(key: &str, value: &str, commented: bool) -> String {
+fn render_assignment(key: &str, value: &str, commented: bool, quote: Option<char>) -> String {
     let rendered_value = if commented && value.is_empty() {
         String::new()
+    } else if let Some(quote) = quote {
+        dotenv::quote_value_with(value, quote)
     } else {
         dotenv::quote_value(value)
     };
@@ -107,7 +114,7 @@ pub fn build_root_example_plan(project: &Project) -> Result<Option<FileWritePlan
     Ok(Some(FileWritePlan {
         path: root_example_path(project),
         contents: render_env_contents(project, &sections, &shared_names, |entry| {
-            render_entry_line(entry, &entry.value, true)
+            render_entry_line(entry, &entry.value, true, entry.quote)
         }),
     }))
 }
@@ -211,7 +218,7 @@ fn append_local_only_entries(
         .filter(|entry| !documented_names.contains(&entry.key))
         .collect::<Vec<_>>();
     let lines = render_sorted_entries(local_only, &mut |entry| {
-        render_entry_line(entry, &entry.value, false)
+        render_entry_line(entry, &entry.value, false, entry.quote)
     });
 
     if lines.is_empty() {
@@ -538,6 +545,50 @@ mod tests {
 
         assert!(env_contents.contains("DATABASE_URL=file:./example.db"));
         assert!(env_contents.contains("# ---- local-only ----\nDEV_DISABLE_EMAILS=true"));
+    }
+
+    #[test]
+    fn copy_preserves_explicit_example_quotes() {
+        let tempdir = tempfile::tempdir().unwrap();
+        fs::write(
+            tempdir.path().join(".env.example"),
+            "S3_BUCKET_NAME=\"solid-launch\"\n",
+        )
+        .unwrap();
+
+        let project = Project {
+            root: tempdir.path().to_path_buf(),
+            is_monorepo: false,
+            workspaces: vec![test_workspace(tempdir.path(), ".")],
+        };
+
+        let plan = build_copy_plan(&project, false, true).unwrap();
+        let env_contents = write_contents(&plan, ".env");
+
+        assert_eq!(env_contents, "S3_BUCKET_NAME=\"solid-launch\"\n");
+    }
+
+    #[test]
+    fn copy_does_not_fold_inline_comments_into_values() {
+        let tempdir = tempfile::tempdir().unwrap();
+        fs::write(
+            tempdir.path().join(".env.example"),
+            "S3_BUCKET_NAME=\"solid-launch\" # Create this bucket locally\n",
+        )
+        .unwrap();
+
+        let project = Project {
+            root: tempdir.path().to_path_buf(),
+            is_monorepo: false,
+            workspaces: vec![test_workspace(tempdir.path(), ".")],
+        };
+
+        let plan = build_copy_plan(&project, false, true).unwrap();
+        let env_contents = write_contents(&plan, ".env");
+
+        assert_eq!(env_contents, "S3_BUCKET_NAME=\"solid-launch\"\n");
+        assert!(!env_contents.contains("Create this bucket"));
+        assert!(!env_contents.contains("\\\"solid-launch\\\""));
     }
 
     #[test]
