@@ -16,14 +16,16 @@ pub fn build_copy_plan(
     overwrite: bool,
 ) -> Result<CopyPlan> {
     let env_path = project.root.join(".env");
-    let existing = dotenv::parse_file(&env_path)?
-        .into_iter()
-        .map(|entry| (entry.key, entry.value))
+    let existing_entries = dotenv::parse_file(&env_path)?;
+    let existing = existing_entries
+        .iter()
+        .map(|entry| (entry.key.clone(), entry.value.clone()))
         .collect::<HashMap<_, _>>();
 
     let shared_names = shared_schema_names(project)?;
     let sections = example_sections(project)?;
-    let env_contents = render_env_contents(project, &sections, &shared_names, |entry| {
+    let documented_names = section_entry_names(&sections);
+    let mut env_contents = render_env_contents(project, &sections, &shared_names, |entry| {
         let value = copy_entry_value(
             &entry.value,
             &entry.key,
@@ -34,6 +36,7 @@ pub fn build_copy_plan(
         );
         format!("{}={}", entry.key, dotenv::quote_value(&value))
     });
+    append_local_only_entries(&mut env_contents, &existing_entries, &documented_names);
 
     let mut writes = vec![FileWritePlan {
         path: env_path,
@@ -147,6 +150,40 @@ fn render_sorted_entries(
         previous_group = Some(group);
     }
     lines
+}
+
+fn section_entry_names(sections: &[ExampleSection]) -> BTreeSet<String> {
+    sections
+        .iter()
+        .flat_map(|section| section.entries.iter().map(|entry| entry.key.clone()))
+        .collect()
+}
+
+fn append_local_only_entries(
+    contents: &mut String,
+    existing_entries: &[DotenvEntry],
+    documented_names: &BTreeSet<String>,
+) {
+    let local_only = existing_entries
+        .iter()
+        .filter(|entry| !documented_names.contains(&entry.key))
+        .collect::<Vec<_>>();
+    let lines = render_sorted_entries(local_only, &mut |entry| {
+        format!("{}={}", entry.key, dotenv::quote_value(&entry.value))
+    });
+
+    if lines.is_empty() {
+        return;
+    }
+
+    let mut output = contents.trim_end().to_string();
+    if !output.is_empty() {
+        output.push_str("\n\n");
+    }
+    output.push_str("# ---- local-only ----\n");
+    output.push_str(&lines.join("\n"));
+    output.push('\n');
+    *contents = output;
 }
 
 fn shared_schema_names(project: &Project) -> Result<BTreeSet<String>> {
@@ -405,6 +442,60 @@ mod tests {
         )));
         assert!(example_contents.contains("DATABASE_URL=\"file:$(pwd)/api.db\""));
         assert_eq!(plan.writes.len(), 2);
+    }
+
+    #[test]
+    fn copy_preserves_local_only_entries() {
+        let tempdir = tempfile::tempdir().unwrap();
+        fs::write(
+            tempdir.path().join(".env"),
+            "DATABASE_URL=file:./local.db\nDEV_DISABLE_EMAILS=true\n",
+        )
+        .unwrap();
+        fs::write(
+            tempdir.path().join(".env.example"),
+            "DATABASE_URL=file:./example.db\n",
+        )
+        .unwrap();
+
+        let project = Project {
+            root: tempdir.path().to_path_buf(),
+            is_monorepo: false,
+            workspaces: vec![test_workspace(tempdir.path(), ".")],
+        };
+
+        let plan = build_copy_plan(&project, false, false).unwrap();
+        let env_contents = write_contents(&plan, ".env");
+
+        assert!(env_contents.contains("DATABASE_URL=file:./local.db"));
+        assert!(env_contents.contains("# ---- local-only ----\nDEV_DISABLE_EMAILS=true"));
+    }
+
+    #[test]
+    fn overwrite_preserves_local_only_entries() {
+        let tempdir = tempfile::tempdir().unwrap();
+        fs::write(
+            tempdir.path().join(".env"),
+            "DATABASE_URL=file:./local.db\nDEV_DISABLE_EMAILS=true\n",
+        )
+        .unwrap();
+        fs::write(
+            tempdir.path().join(".env.example"),
+            "DATABASE_URL=file:./example.db\n",
+        )
+        .unwrap();
+
+        let project = Project {
+            root: tempdir.path().to_path_buf(),
+            is_monorepo: false,
+            workspaces: vec![test_workspace(tempdir.path(), ".")],
+        };
+
+        let plan = build_copy_plan(&project, false, true).unwrap();
+        let env_contents = write_contents(&plan, ".env");
+
+        assert!(env_contents.contains("DATABASE_URL=file:./example.db"));
+        assert!(env_contents.contains("# ---- local-only ----\nDEV_DISABLE_EMAILS=true"));
     }
 
     fn write_contents<'a>(plan: &'a CopyPlan, name: &str) -> &'a str {

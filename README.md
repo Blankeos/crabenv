@@ -70,7 +70,7 @@ Regardless of the language or mix of languages in your repositories, you'll be a
 - [x] 🐍 Python
 - [x] 🦀 Rust
 - [x] 🐦 Flutter
-- [x] More? Request an adapter.
+- [x] More? Request an adapter via issue (the conventional standard must be discussed).
 
 <!--### 🤒 Pains solved:
 

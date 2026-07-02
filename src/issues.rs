@@ -169,7 +169,7 @@ pub fn collect_issues(project: &Project, graph: &EnvGraph) -> Result<Vec<Issue>>
                 continue;
             }
             issues.push(Issue {
-                severity: Severity::Warn,
+                severity: Severity::Info,
                 message: format!(
                     "{} exists in local but is missing from schema and template",
                     record.name
@@ -205,4 +205,63 @@ fn package_json_has_script(path: &Path, script: &str) -> Result<bool> {
         .get("scripts")
         .and_then(|scripts| scripts.get(script))
         .is_some())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{EnvRecord, Scope, Workspace};
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::path::PathBuf;
+    use tempfile::tempdir;
+
+    #[test]
+    fn local_only_vars_are_informational() {
+        let tempdir = tempdir().unwrap();
+        fs::write(tempdir.path().join(".env"), "DEV_DISABLE_EMAILS=true\n").unwrap();
+        fs::write(tempdir.path().join(".env.example"), "").unwrap();
+        fs::write(
+            tempdir.path().join("package.json"),
+            r#"{"scripts":{"with-env":"crabenv"}}"#,
+        )
+        .unwrap();
+        let project = Project {
+            root: tempdir.path().to_path_buf(),
+            is_monorepo: false,
+            workspaces: vec![Workspace {
+                root: tempdir.path().to_path_buf(),
+                rel: PathBuf::from("."),
+                kind: WorkspaceKind::App,
+                framework: "typescript".to_string(),
+            }],
+        };
+        let mut graph = EnvGraph::new();
+        graph.insert(
+            (PathBuf::from("."), "DEV_DISABLE_EMAILS".to_string()),
+            EnvRecord {
+                name: "DEV_DISABLE_EMAILS".to_string(),
+                owner: PathBuf::from("."),
+                scope: Scope::Unknown,
+                value_type: None,
+                enum_values: None,
+                required: None,
+                default_value: None,
+                description: None,
+                example_value: None,
+                local_present: true,
+                surfaces: BTreeSet::from([EnvSurface::Local]),
+                surface_sources: BTreeMap::new(),
+                sources: BTreeSet::new(),
+            },
+        );
+
+        let issues = collect_issues(&project, &graph).unwrap();
+        let issue = issues
+            .iter()
+            .find(|issue| issue.message.contains("DEV_DISABLE_EMAILS exists in local"))
+            .expect("expected local-only issue");
+
+        assert!(matches!(issue.severity, Severity::Info));
+        assert!(issue.fix.is_none());
+    }
 }

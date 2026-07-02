@@ -127,6 +127,7 @@ pub fn render_doctor_inventory(project: &Project, graph: &EnvGraph) {
                 .map(|record| record.name.clone())
                 .unwrap_or_default(),
             owner: format_group_owner(records, app_owner_count, false),
+            has_definition_surface: group_has_definition_surface(records),
             surfaces: group_surfaces(records),
         })
         .collect::<Vec<_>>();
@@ -168,8 +169,14 @@ pub fn render_doctor_inventory(project: &Project, graph: &EnvGraph) {
     }
 
     for row in rows {
-        let schema = required_surface_cell(row.surfaces.contains(&EnvSurface::Schema));
-        let template = required_surface_cell(row.surfaces.contains(&EnvSurface::Template));
+        let schema = definition_surface_cell(
+            row.surfaces.contains(&EnvSurface::Schema),
+            row.has_definition_surface,
+        );
+        let template = definition_surface_cell(
+            row.surfaces.contains(&EnvSurface::Template),
+            row.has_definition_surface,
+        );
         let local = required_surface_cell(row.surfaces.contains(&EnvSurface::Local));
         let sinks = optional_surface_cell(row.surfaces.contains(&EnvSurface::Sinks));
 
@@ -345,6 +352,14 @@ fn required_surface_cell(checked: bool) -> String {
     }
 }
 
+fn definition_surface_cell(checked: bool, has_definition_surface: bool) -> String {
+    if has_definition_surface {
+        required_surface_cell(checked)
+    } else {
+        optional_surface_cell(checked)
+    }
+}
+
 fn optional_surface_cell(checked: bool) -> String {
     if checked {
         color("[x]", "32")
@@ -488,6 +503,7 @@ fn split_long_word(word: &str, width: usize) -> Vec<String> {
 struct DoctorInventoryRow {
     name: String,
     owner: String,
+    has_definition_surface: bool,
     surfaces: BTreeSet<EnvSurface>,
 }
 
@@ -542,6 +558,14 @@ mod tests {
         assert_eq!(
             compare_inventory_rows("S3_BUCKET", "shared(2)", "RESEND_API_KEY", "shared(3)"),
             Ordering::Greater
+        );
+    }
+
+    #[test]
+    fn definition_surface_cells_are_optional_for_local_only_rows() {
+        assert_eq!(
+            definition_surface_cell(false, false),
+            optional_surface_cell(false)
         );
     }
 

@@ -479,10 +479,14 @@ pub fn run_doctor(project: &Project, args: DoctorArgs) -> Result<()> {
     let graph = build_graph(project)?;
     let mut issues = collect_issues(project, &graph)?;
     add_format_issue(&mut issues, format_writes.len());
-    if issues.is_empty() {
+    let actionable_issue_count = actionable_doctor_issue_count(&issues);
+    if actionable_issue_count == 0 {
         println!("crabenv doctor: {}", color("no issues found", "32"));
     } else {
-        println!("crabenv doctor: {} issue(s)", issues.len());
+        println!("crabenv doctor: {} issue(s)", actionable_issue_count);
+    }
+
+    if !issues.is_empty() {
         for issue in &issues {
             println!("{} {}", severity_label(&issue.severity), issue.message);
             if issue.fix.is_some() {
@@ -520,6 +524,13 @@ pub fn run_doctor(project: &Project, args: DoctorArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn actionable_doctor_issue_count(issues: &[Issue]) -> usize {
+    issues
+        .iter()
+        .filter(|issue| !matches!(issue.severity, Severity::Info))
+        .count()
 }
 
 pub fn run_format(project: &Project, args: FormatArgs) -> Result<()> {
@@ -1347,6 +1358,41 @@ mod tests {
             issues[0].message,
             "2 file(s) need formatting; run crabenv format"
         );
+    }
+
+    #[test]
+    fn doctor_issue_count_ignores_info_notes() {
+        let issues = vec![Issue {
+            severity: Severity::Info,
+            message: "DEV_DISABLE_EMAILS exists in local but is missing from schema and template"
+                .to_string(),
+            fix: None,
+        }];
+
+        assert_eq!(actionable_doctor_issue_count(&issues), 0);
+    }
+
+    #[test]
+    fn doctor_issue_count_counts_warnings_and_errors() {
+        let issues = vec![
+            Issue {
+                severity: Severity::Info,
+                message: "local-only note".to_string(),
+                fix: None,
+            },
+            Issue {
+                severity: Severity::Warn,
+                message: "warning".to_string(),
+                fix: None,
+            },
+            Issue {
+                severity: Severity::Error,
+                message: "error".to_string(),
+                fix: None,
+            },
+        ];
+
+        assert_eq!(actionable_doctor_issue_count(&issues), 2);
     }
 
     #[test]
