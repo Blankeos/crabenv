@@ -377,17 +377,67 @@ pub struct ObjectBlock {
 fn insert_object_entry(contents: &mut String, label: &str, line: &str) -> Result<()> {
     let block = extract_object_block(contents, label)
         .ok_or_else(|| anyhow!("could not find {label} object in TypeScript schema"))?;
-    let insert_at = block.end;
     let body = &contents[block.start..block.end];
-    let insertion = if body.trim().is_empty() {
+    let insert_at = block.start + trailing_comment_block_start(body).unwrap_or(body.len());
+    let body_before_insert = &contents[block.start..insert_at];
+    let insertion = if body_before_insert.trim().is_empty() {
         format!("\n{line}\n  ")
-    } else if body.ends_with('\n') {
+    } else if body_before_insert.ends_with('\n') {
         format!("{line}\n")
     } else {
         format!("\n{line}\n  ")
     };
     contents.insert_str(insert_at, &insertion);
     Ok(())
+}
+
+fn trailing_comment_block_start(body: &str) -> Option<usize> {
+    let lines = body_lines(body);
+    let mut index = lines.len();
+
+    while index > 0 && lines[index - 1].2.trim().is_empty() {
+        index -= 1;
+    }
+
+    let mut found_comment = false;
+    let mut start = None;
+    while index > 0 {
+        let (line_start, _, line) = lines[index - 1];
+        let trimmed = line.trim();
+        if trimmed.is_empty() || is_comment_only_line(trimmed) {
+            if is_comment_only_line(trimmed) {
+                found_comment = true;
+            }
+            start = Some(line_start);
+            index -= 1;
+        } else {
+            break;
+        }
+    }
+
+    found_comment.then_some(start.unwrap_or(body.len()))
+}
+
+fn body_lines(body: &str) -> Vec<(usize, usize, &str)> {
+    let mut lines = Vec::new();
+    let mut start = 0;
+    for (index, ch) in body.char_indices() {
+        if ch == '\n' {
+            lines.push((start, index + ch.len_utf8(), &body[start..index]));
+            start = index + ch.len_utf8();
+        }
+    }
+    if start < body.len() {
+        lines.push((start, body.len(), &body[start..]));
+    }
+    lines
+}
+
+fn is_comment_only_line(trimmed: &str) -> bool {
+    trimmed.starts_with("//")
+        || trimmed.starts_with("/*")
+        || trimmed.starts_with('*')
+        || trimmed.starts_with("*/")
 }
 
 fn find_schema_expr(contents: &str, label: &str, variable: &str) -> Option<String> {
@@ -1143,6 +1193,38 @@ export const privateEnv = createEnv({
     // SMTP_USER: z.string(),
     // SMTP_PASS: z.string(),
     // SMTP_FROM: z.string(),"#
+        ));
+    }
+
+    #[test]
+    fn insert_object_entry_adds_before_trailing_comment_blocks() {
+        let mut contents = r#"import { createEnv } from "@t3-oss/env-core";
+import { z } from "zod";
+
+export const privateEnv = createEnv({
+  runtimeEnv: process.env,
+  server: {
+    PORT: z.coerce.number().default(3000),
+
+    // SMTP - in case you want something other than zeptomail
+    // SMTP_HOST: z.string(),
+    // SMTP_PORT: z.preprocess(Number, z.number()),
+    // SMTP_SECURE: z.preprocess((val) => String(val).toLowerCase() === 'true', z.boolean()),
+    // SMTP_USER: z.string(),
+    // SMTP_PASS: z.string(),
+    // SMTP_FROM: z.string(),
+  },
+});
+"#
+        .to_string();
+
+        insert_object_entry(&mut contents, "server", "    DATABASE_URL: z.string(),").unwrap();
+
+        assert!(contents.contains(
+            r#"    PORT: z.coerce.number().default(3000),
+    DATABASE_URL: z.string(),
+
+    // SMTP - in case you want something other than zeptomail"#
         ));
     }
 

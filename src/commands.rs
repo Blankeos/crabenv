@@ -551,7 +551,13 @@ pub fn run_format(project: &Project, args: FormatArgs) -> Result<()> {
         return Ok(());
     }
 
-    for write in &writes {
+    apply_format_writes(project, &writes)?;
+    println!("crabenv format: formatted {} file(s)", writes.len());
+    Ok(())
+}
+
+fn apply_format_writes(project: &Project, writes: &[FileWritePlan]) -> Result<()> {
+    for write in writes {
         fs::write(&write.path, &write.contents)
             .with_context(|| format!("failed to write {}", write.path.display()))?;
         println!(
@@ -559,8 +565,12 @@ pub fn run_format(project: &Project, args: FormatArgs) -> Result<()> {
             display_rel(&display_path_from_root(project, &write.path))
         );
     }
-    println!("crabenv format: formatted {} file(s)", writes.len());
     Ok(())
+}
+
+fn format_project_after_mutation(project: &Project) -> Result<()> {
+    let writes = build_format_plan(project)?;
+    apply_format_writes(project, &writes)
 }
 
 fn severity_label(severity: &Severity) -> String {
@@ -771,6 +781,7 @@ pub fn run_add_or_update(project: &Project, args: MutateArgs, update: bool) -> R
     } else {
         sync_local_env(project)?;
     }
+    format_project_after_mutation(project)?;
 
     Ok(())
 }
@@ -833,6 +844,7 @@ pub fn run_attach(project: &Project, args: AttachArgs) -> Result<()> {
     );
 
     sync_local_env(project)?;
+    format_project_after_mutation(project)?;
 
     Ok(())
 }
@@ -1411,6 +1423,66 @@ mod tests {
         apply_fixes(&project, &[Fix::Format]).unwrap();
 
         assert!(build_format_plan(&project).unwrap().is_empty());
+    }
+
+    #[test]
+    fn add_formats_schema_and_template_immediately() {
+        let tempdir = tempdir().unwrap();
+        fs::create_dir_all(tempdir.path().join("src")).unwrap();
+        fs::write(
+            tempdir.path().join("package.json"),
+            r#"{"dependencies":{"zod":"latest"}}"#,
+        )
+        .unwrap();
+        fs::write(tempdir.path().join(".env.example"), "RESEND_API_KEY=abc\n").unwrap();
+        fs::write(
+            tempdir.path().join("src/env.private.ts"),
+            r#"import { createEnv } from "@t3-oss/env-core";
+import { z } from "zod";
+
+export const privateEnv = createEnv({
+  runtimeEnv: process.env,
+  server: {
+    RESEND_API_KEY: z.string(),
+  },
+});
+"#,
+        )
+        .unwrap();
+        let project = test_project(tempdir.path());
+
+        run_add_or_update(
+            &project,
+            MutateArgs {
+                variable: Some("PORT".to_string()),
+                owner: None,
+                shared: None,
+                public: false,
+                example: Some("3000".to_string()),
+                description: None,
+                optional: false,
+                default_value: Some("3000".to_string()),
+                string: false,
+                numeric: false,
+                number: true,
+                boolean: false,
+                enum_values: None,
+                test_regex: None,
+                test_regex_message: None,
+            },
+            false,
+        )
+        .unwrap();
+
+        assert!(build_format_plan(&project).unwrap().is_empty());
+        let schema = fs::read_to_string(tempdir.path().join("src/env.private.ts")).unwrap();
+        assert!(schema.contains(
+            r#"  server: {
+    PORT: z.coerce.number().default(3000),
+
+    RESEND_API_KEY: z.string(),
+  },"#
+        ));
     }
 
     #[test]
