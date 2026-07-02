@@ -66,6 +66,9 @@ pub fn prompt_add_or_update(project: &Project, update: bool) -> Result<MutateArg
         selected_old
             .as_ref()
             .and_then(|record| record.value_type.as_deref()),
+        selected_old
+            .as_ref()
+            .and_then(|record| record.enum_values.as_deref()),
     )?;
 
     // --- Description ---
@@ -492,7 +495,7 @@ fn old_marker(label: &str, is_old: bool) -> String {
 }
 
 fn mutation_confirm_prompt(action: &str, variable: &str, owner: &str, scope: &str) -> String {
-    format!("Apply: {action} {variable} in {owner} ({scope})?")
+    format!("Apply: {action} {} in {owner} ({scope})?", variable.cyan())
 }
 
 /// A filterable select that keeps cliclack's original radio-circle option UI.
@@ -708,7 +711,10 @@ fn prompt_scope(old_scope: Option<&Scope>) -> Result<bool> {
 }
 
 /// Returns (numeric, number, boolean, string, enum_values)
-fn prompt_type_bundle(old_type: Option<&str>) -> Result<(bool, bool, bool, bool, Option<String>)> {
+fn prompt_type_bundle(
+    old_type: Option<&str>,
+    old_enum_values: Option<&[String]>,
+) -> Result<(bool, bool, bool, bool, Option<String>)> {
     let initial = old_type.and_then(type_choice);
     let mut prompt = select("Type")
         .item(
@@ -746,19 +752,46 @@ fn prompt_type_bundle(old_type: Option<&str>) -> Result<(bool, bool, bool, bool,
         "numeric" => Ok((true, false, false, false, None)),
         "boolean" => Ok((false, false, true, false, None)),
         "enum" => {
-            let values: String = input("Enum values (comma-separated)")
-                .placeholder("e.g. debug,info,warn,error")
-                .validate(|s: &String| {
-                    if s.trim().is_empty() {
-                        Err("At least one value required".to_string())
-                    } else {
-                        Ok(())
-                    }
+            let old_values = old_enum_values.and_then(enum_values_csv);
+            let mut prompt = input(keep_current_prompt_label(
+                "Enum values (comma-separated)",
+                old_values.is_some(),
+            ));
+            if let Some(old_values) = &old_values {
+                prompt = prompt.default_input(old_values);
+            } else {
+                prompt = prompt.placeholder("e.g. debug,info,warn,error");
+            }
+            let old_values_for_validation = old_values.clone();
+            let values: String = prompt
+                .required(false)
+                .validate(move |s: &String| {
+                    validate_enum_values_input(s, old_values_for_validation.as_deref())
                 })
                 .interact()?;
+            let values = if values.trim().is_empty() {
+                old_values.unwrap_or_default()
+            } else {
+                values
+            };
             Ok((false, false, false, false, Some(values)))
         }
         _ => Ok((false, false, false, true, None)),
+    }
+}
+
+fn enum_values_csv(values: &[String]) -> Option<String> {
+    (!values.is_empty()).then(|| values.join(","))
+}
+
+fn validate_enum_values_input(
+    value: &str,
+    old_value: Option<&str>,
+) -> std::result::Result<(), String> {
+    if value.trim().is_empty() && old_value.is_none() {
+        Err("At least one value required".to_string())
+    } else {
+        Ok(())
     }
 }
 
@@ -810,6 +843,14 @@ fn optional_prompt_label(label: &str, has_existing_value: bool) -> String {
         format!("{label} (optional, Enter keeps current, !clear for none)")
     } else {
         format!("{label} (optional, leave empty for none)")
+    }
+}
+
+fn keep_current_prompt_label(label: &str, has_existing_value: bool) -> String {
+    if has_existing_value {
+        format!("{label} (Enter keeps current)")
+    } else {
+        label.to_string()
     }
 }
 

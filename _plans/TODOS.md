@@ -22,3 +22,5 @@
   - The simple solutions in my head are:
     - ~~typescript: always add emptyStringAsUndefined: true, but for other languages idk (so this becomes a typescript-only-like solution).~~
     - something that fits all languages: as long as a variable's SCHEMA defines optional && EXAMPLE defines none, add a `# VAR` to it. meaning comment it out, but make it appear in the .env.example (when generating an example) and the .env (when done via crabenv cp) - gpt likes this!
+
+- [ ] Enum values during `crabenv update` doesn't show the 'old' values. it's always input required.
