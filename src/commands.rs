@@ -18,9 +18,7 @@ use crate::models::{
     EnvRecord, EnvSurface, FileWritePlan, Fix, Issue, Project, Scope, Severity, VarMutation,
     Workspace,
 };
-use crate::render::{
-    format_list_detail, list_rows, render_doctor_inventory, render_list, render_list_json, ListRow,
-};
+use crate::render::{list_rows, render_doctor_inventory, render_list, render_list_json, ListRow};
 use crate::sinks::apply_sink_plan;
 use crate::util::{color, display_rel, normalize_rel_display, validate_var_name};
 
@@ -383,11 +381,10 @@ fn run_interactive_list(project: &Project, graph: &EnvGraph, expand: bool) -> Re
 }
 
 fn list_label(row: &ListRow) -> String {
-    let detail = format_list_detail(row);
-    let description = if detail == "-" {
+    let description = if row.description == "-" {
         String::new()
     } else {
-        format!(" - {detail}")
+        format!(" - {}", row.description)
     };
     format!("{}. {}{}", row.index, row.name, description)
 }

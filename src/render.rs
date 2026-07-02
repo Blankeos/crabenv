@@ -76,8 +76,7 @@ pub fn render_list(project: &Project, graph: &EnvGraph, expand: bool) {
     println!("{}", "-".repeat(widths.total()));
 
     for row in rows {
-        let detail = format_list_detail(&row);
-        let detail_lines = wrap_cell(&detail, widths.description);
+        let description_lines = wrap_cell(&row.description, widths.description);
         println!(
             "{:<idx$}  {:<name$}  {:<owner$}  {:<scope$}  {:<type_width$}  {:<surfaces$}  {}",
             row.index,
@@ -86,7 +85,7 @@ pub fn render_list(project: &Project, graph: &EnvGraph, expand: bool) {
             row.scope,
             row.value_type,
             row.surfaces,
-            detail_lines.first().map(String::as_str).unwrap_or(""),
+            description_lines.first().map(String::as_str).unwrap_or(""),
             idx = widths.index,
             name = widths.name,
             owner = widths.owner,
@@ -94,7 +93,7 @@ pub fn render_list(project: &Project, graph: &EnvGraph, expand: bool) {
             type_width = widths.value_type,
             surfaces = widths.surfaces,
         );
-        for line in detail_lines.iter().skip(1) {
+        for line in description_lines.iter().skip(1) {
             println!(
                 "{:<idx$}  {:<name$}  {:<owner$}  {:<scope$}  {:<type_width$}  {:<surfaces$}  {}",
                 "",
@@ -371,15 +370,6 @@ fn format_group_example(records: &[&EnvRecord]) -> String {
     }
 }
 
-pub fn format_list_detail(row: &ListRow) -> String {
-    match (row.description.as_str(), row.example.as_str()) {
-        ("-", "-") => "-".to_string(),
-        (description, "-") => description.to_string(),
-        ("-", example) => format!("- example: {example}"),
-        (description, example) => format!("{description} - example: {example}"),
-    }
-}
-
 fn group_surfaces(records: &[&EnvRecord]) -> BTreeSet<EnvSurface> {
     records
         .iter()
@@ -532,7 +522,7 @@ impl ListWidths {
             widths.surfaces = widths.surfaces.max(row.surfaces.len());
             widths.description = widths
                 .description
-                .max(format_list_detail(row).len().min(DESCRIPTION_WIDTH));
+                .max(row.description.len().min(DESCRIPTION_WIDTH));
         }
 
         widths
