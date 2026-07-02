@@ -1,6 +1,6 @@
 {
   "name": "crabenv",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "The simplest, opinionated way to keep .env files, schemas, and examples aligned.",
   "main": "bin.js",
   "bin": {

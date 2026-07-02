@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.4] - 2026-07-02
+
+### Bug Fixes
+
+- Retain enum defaults when updating variables by @Blankeos
+- Preserve quote style and ignore inline comments in env parsing by @Blankeos
+- Format env schema files after mutations and preserve trailing comments by @Blankeos
+
+### Features
+
+- Add comment-aware optionals, json output, fixes on add/update/remove/cp by @Blankeos
+- Support partial updates for existing env variables by @Blankeos
+
+### Refactor
+
+- Remove redundant list detail formatter by @Blankeos
+- Better message before applying update or add by @Blankeos
+
 ## [0.0.3] - 2026-07-02
 
 ### Bug Fixes
