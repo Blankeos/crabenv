@@ -127,7 +127,10 @@ pub fn prompt_add_or_update(project: &Project, update: bool) -> Result<MutateArg
     } else {
         owner.to_string_lossy().to_string()
     };
-    let yes = confirm(format!("{action} {variable} in {owner_str} ({scope_str})?")).interact()?;
+    let yes = confirm(mutation_confirm_prompt(
+        action, &variable, &owner_str, scope_str,
+    ))
+    .interact()?;
 
     if !yes {
         outro_cancel("Cancelled.")?;
@@ -481,6 +484,10 @@ fn old_marker(label: &str, is_old: bool) -> String {
     } else {
         label.to_string()
     }
+}
+
+fn mutation_confirm_prompt(action: &str, variable: &str, owner: &str, scope: &str) -> String {
+    format!("Apply: {action} {variable} in {owner} ({scope})?")
 }
 
 /// A filterable select that keeps cliclack's original radio-circle option UI.
