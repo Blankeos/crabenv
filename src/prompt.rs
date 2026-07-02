@@ -154,7 +154,7 @@ pub fn prompt_add_or_update(project: &Project, update: bool) -> Result<MutateArg
         public,
         example,
         description,
-        optional,
+        optional: Some(optional),
         default_value,
         string,
         numeric,

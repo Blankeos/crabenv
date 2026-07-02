@@ -72,7 +72,7 @@ pub enum Commands {
     #[command(
         about = "Update selected fields on an existing env var",
         long_about = "Update an existing env var by changing only the fields you pass. For example, --example only updates .env.example; --description only updates the schema comment while preserving the current type/default. Pass --owner in monorepos, or use bare --shared / --shared '*' for every app owner.",
-        after_help = "Examples:\n  crabenv update DATABASE_URL --owner apps/hono-api --example file:./new-local.db\n  crabenv update DATABASE_URL --shared --example file:./new-local.db\n  crabenv update DATABASE_URL --shared apps/hono-api apps/next-web --example file:./new-local.db\n  crabenv update LOG_LEVEL --owner apps/api --enum debug,info,warn,error --default debug"
+        after_help = "Examples:\n  crabenv update DATABASE_URL --owner apps/hono-api --example file:./new-local.db\n  crabenv update DATABASE_URL --shared --example file:./new-local.db\n  crabenv update DATABASE_URL --shared apps/hono-api apps/next-web --example file:./new-local.db\n  crabenv update LOG_LEVEL --owner apps/api --enum debug,info,warn,error --default debug\n  crabenv update SENTRY_DSN --optional=false"
     )]
     Update(MutateArgs),
     #[command(
@@ -171,8 +171,13 @@ pub struct MutateArgs {
     )]
     pub description: Option<String>,
 
-    #[arg(long, help = "Mark the schema value as optional")]
-    pub optional: bool,
+    #[arg(
+        long,
+        num_args = 0..=1,
+        default_missing_value = "true",
+        help = "Mark the schema value as optional; pass --optional=false to mark required"
+    )]
+    pub optional: Option<bool>,
 
     #[arg(
         long = "default",
@@ -221,7 +226,7 @@ impl From<&MutateArgs> for VarMutation {
             variable: args.variable.clone().unwrap_or_default(),
             description: args.description.clone(),
             example: args.example.clone(),
-            optional: args.optional,
+            optional: args.optional.unwrap_or(false),
             default_value: args.default_value.clone(),
             numeric: args.numeric,
             number: args.number,

@@ -782,7 +782,7 @@ pub fn run_add_or_update(project: &Project, args: MutateArgs, update: bool) -> R
                     )
                 })?;
 
-            if args.optional {
+            if args.optional == Some(true) {
                 dotenv::upsert_commented_example(
                     &dotenv::example_path(app),
                     variable,
@@ -868,7 +868,7 @@ fn has_update_edit_flags(args: &MutateArgs) -> bool {
 
 fn has_schema_update_edit_flags(args: &MutateArgs) -> bool {
     args.description.is_some()
-        || args.optional
+        || args.optional.is_some()
         || args.default_value.is_some()
         || args.string
         || args.numeric
@@ -895,8 +895,8 @@ fn update_mutation_from_record(record: &EnvRecord, args: &MutateArgs) -> VarMuta
     if let Some(description) = &args.description {
         mutation.description = Some(description.clone());
     }
-    if args.optional {
-        mutation.optional = true;
+    if let Some(optional) = args.optional {
+        mutation.optional = optional;
         mutation.default_value = None;
     }
     if let Some(default_value) = &args.default_value {
@@ -1537,7 +1537,7 @@ mod tests {
             public: false,
             example: None,
             description: None,
-            optional: false,
+            optional: None,
             default_value: None,
             string: false,
             numeric: false,
@@ -1736,7 +1736,7 @@ export const privateEnv = createEnv({
                 public: false,
                 example: Some("3000".to_string()),
                 description: None,
-                optional: false,
+                optional: None,
                 default_value: Some("3000".to_string()),
                 string: false,
                 numeric: false,
@@ -1817,7 +1817,7 @@ export const privateEnv = createEnv({
         write_typescript_project(tempdir.path());
         let project = test_project(tempdir.path());
         let mut args = mutate_args("SENTRY_DSN");
-        args.optional = true;
+        args.optional = Some(true);
 
         run_add_or_update(&project, args, false).unwrap();
 
@@ -1836,7 +1836,7 @@ export const privateEnv = createEnv({
         write_typescript_project(tempdir.path());
         let project = test_project(tempdir.path());
         let mut args = mutate_args("PORT");
-        args.optional = true;
+        args.optional = Some(true);
         args.example = Some("3000".to_string());
         args.default_value = Some("3000".to_string());
         args.number = true;
@@ -1909,6 +1909,79 @@ export const privateEnv = createEnv({
         assert!(schema.contains(
             r#"NODE_ENV: z.enum(["development", "test", "production"]).default("development")"#
         ));
+    }
+
+    #[test]
+    fn update_optional_false_marks_existing_optional_schema_required() {
+        let tempdir = tempdir().unwrap();
+        write_typescript_project(tempdir.path());
+        fs::write(
+            tempdir.path().join(".env.example"),
+            "NODE_ENV=development\n# WEIRDO=weird\n",
+        )
+        .unwrap();
+        fs::write(
+            tempdir.path().join("src/env.private.ts"),
+            r#"import { createEnv } from "@t3-oss/env-core";
+import { z } from "zod";
+
+export const privateEnv = createEnv({
+  runtimeEnv: process.env,
+  server: {
+    NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+    WEIRDO: z.string().optional(),
+  },
+});
+"#,
+        )
+        .unwrap();
+        let project = test_project(tempdir.path());
+        let mut args = mutate_args("WEIRDO");
+        args.optional = Some(false);
+
+        run_add_or_update(&project, args, true).unwrap();
+
+        let schema = fs::read_to_string(tempdir.path().join("src/env.private.ts")).unwrap();
+        assert!(schema.contains("WEIRDO: z.string(),"));
+        assert!(!schema.contains("WEIRDO: z.string().optional(),"));
+    }
+
+    #[test]
+    fn update_optional_true_marks_schema_optional_and_comments_example() {
+        let tempdir = tempdir().unwrap();
+        write_typescript_project(tempdir.path());
+        fs::write(
+            tempdir.path().join(".env.example"),
+            "NODE_ENV=development\nWEIRDO=weird\n",
+        )
+        .unwrap();
+        fs::write(
+            tempdir.path().join("src/env.private.ts"),
+            r#"import { createEnv } from "@t3-oss/env-core";
+import { z } from "zod";
+
+export const privateEnv = createEnv({
+  runtimeEnv: process.env,
+  server: {
+    NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+    WEIRDO: z.string(),
+  },
+});
+"#,
+        )
+        .unwrap();
+        let project = test_project(tempdir.path());
+        let mut args = mutate_args("WEIRDO");
+        args.optional = Some(true);
+        args.example = Some("weird".to_string());
+
+        run_add_or_update(&project, args, true).unwrap();
+
+        let schema = fs::read_to_string(tempdir.path().join("src/env.private.ts")).unwrap();
+        assert!(schema.contains("WEIRDO: z.string().optional(),"));
+        let example = fs::read_to_string(tempdir.path().join(".env.example")).unwrap();
+        assert!(example.contains("# WEIRDO=weird"));
+        assert!(!example.contains("\nWEIRDO=weird"));
     }
 
     #[test]

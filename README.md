@@ -125,7 +125,7 @@ crabenv add {VARIABLE_NAME}
     --testRegex         # optional
     --testRegexMessage  # optional, required when used with `testRegex`
     # ... essentially a cli version of zod
-    # Special environment overrides
+    # Special environment overrides (This is planned, but might be too hard, you can just edit the schema i.e. `.refine(process.env.NODE_ENV === "development"))`
     --{}_development     # Checks env=development, before applying the type
     --{}_staging         # Checks env=staging, before applying the type
     --{}_production      # Checks env=production, before applying the type
