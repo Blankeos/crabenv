@@ -15,3 +15,5 @@
 - [x] `crabcode ls` In enum(2), might wanna see the specific enum values.
 - [x] Add fixes for the `--shared` case.. i.e. being able to choose the specific or `"*"` all. so maybe also say `shared(*)` if it's all.
   - some ideas, in cli: be able to pass multiple apps. in wizard, have a multiselect (no need filter) option maybe.
+
+- [ ] Make a TUI version of `crabenv ls` and make that the default using ratatui. The print mode is just when we do `crabenv ls --print`. Reason: the command is normally done via a human and the table is not readable for a human.

@@ -454,11 +454,13 @@ fn format_object_entries(contents: &mut String, label: &str) -> Result<()> {
 
     let mut sortable = Vec::new();
     let mut loose = Vec::new();
+    let mut last_sortable_index = None;
     for (index, entry) in entries.into_iter().enumerate() {
         if let Some(key) = entry_key(&entry) {
+            last_sortable_index = Some(index);
             sortable.push(SchemaEntry { key, entry, index });
         } else {
-            loose.push(entry);
+            loose.push(LooseSchemaEntry { entry, index });
         }
     }
 
@@ -468,8 +470,11 @@ fn format_object_entries(contents: &mut String, label: &str) -> Result<()> {
     });
 
     let mut body_lines = Vec::new();
-    for entry in loose {
-        push_schema_entry(&mut body_lines, &entry, false);
+    let trailing_start = last_sortable_index
+        .map(|index| index + 1)
+        .unwrap_or(usize::MAX);
+    for entry in loose.iter().filter(|entry| entry.index < trailing_start) {
+        push_schema_entry(&mut body_lines, &entry.entry, false);
     }
 
     let mut previous_group: Option<String> = None;
@@ -487,6 +492,13 @@ fn format_object_entries(contents: &mut String, label: &str) -> Result<()> {
         previous_group = Some(group);
     }
 
+    for entry in loose.iter().filter(|entry| entry.index >= trailing_start) {
+        if !body_lines.is_empty() && !body_lines.last().is_some_and(|line| line.is_empty()) {
+            body_lines.push(String::new());
+        }
+        push_schema_entry(&mut body_lines, &entry.entry, false);
+    }
+
     let new_body = if body_lines.is_empty() {
         String::new()
     } else {
@@ -499,6 +511,12 @@ fn format_object_entries(contents: &mut String, label: &str) -> Result<()> {
 #[derive(Debug)]
 struct SchemaEntry {
     key: String,
+    entry: String,
+    index: usize,
+}
+
+#[derive(Debug)]
+struct LooseSchemaEntry {
     entry: String,
     index: usize,
 }
@@ -1085,6 +1103,47 @@ export const privateEnv = createEnv({
     DATABASE_URL: z.string(),"#
         ));
         assert!(!formatted.contains("\n    managed database URL elsewhere."));
+    }
+
+    #[test]
+    fn format_schema_contents_keeps_trailing_comment_blocks_at_end() {
+        let contents = r#"import { createEnv } from "@t3-oss/env-core";
+import { z } from "zod";
+
+export const privateEnv = createEnv({
+  runtimeEnv: process.env,
+  server: {
+    RESEND_API_KEY: z.string(),
+    NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+    DATABASE_URL: z.string(),
+    // SMTP
+    // SMTP_HOST: z.string(),
+    // SMTP_PORT: z.preprocess(Number, z.number()),
+    // SMTP_SECURE: z.preprocess((val) => String(val).toLowerCase() === 'true', z.boolean()),
+    // SMTP_USER: z.string(),
+    // SMTP_PASS: z.string(),
+    // SMTP_FROM: z.string(),
+  },
+});
+"#;
+
+        let formatted = format_schema_contents(contents, &Scope::Private).unwrap();
+
+        assert!(formatted.contains(
+            r#"    NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+
+    DATABASE_URL: z.string(),
+
+    RESEND_API_KEY: z.string(),
+
+    // SMTP
+    // SMTP_HOST: z.string(),
+    // SMTP_PORT: z.preprocess(Number, z.number()),
+    // SMTP_SECURE: z.preprocess((val) => String(val).toLowerCase() === 'true', z.boolean()),
+    // SMTP_USER: z.string(),
+    // SMTP_PASS: z.string(),
+    // SMTP_FROM: z.string(),"#
+        ));
     }
 
     #[test]
