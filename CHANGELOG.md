@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.5] - 2026-07-05
+
+### Bug Fixes
+
+- Preserve existing env entries during additive copy and formatting by @Blankeos
+
+### Features
+
+- Support explicit `--optional=false` in env updates by @Blankeos
+
 ## [0.0.4] - 2026-07-02
 
 ### Bug Fixes
