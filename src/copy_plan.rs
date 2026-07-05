@@ -1,5 +1,6 @@
 use anyhow::{anyhow, bail, Context, Result};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fs;
 use std::path::Path;
 use std::process::Command;
 
@@ -16,25 +17,36 @@ pub fn build_copy_plan(
     overwrite: bool,
 ) -> Result<CopyPlan> {
     let env_path = project.root.join(".env");
-    let existing_entries = dotenv::parse_active_file(&env_path)?;
-    let existing = existing_entries
+    let existing_active_entries = dotenv::parse_active_file(&env_path)?;
+    let existing = existing_active_entries
         .iter()
         .map(|entry| (entry.key.clone(), entry.value.clone()))
         .collect::<HashMap<_, _>>();
 
     let shared_names = shared_schema_names(project)?;
     let sections = example_sections(project)?;
-    let documented_names = section_entry_names(&sections);
-    let mut env_contents = render_env_contents(project, &sections, &shared_names, |entry| {
-        render_copy_entry(
-            entry,
-            &existing,
+    let env_contents = if overwrite {
+        let documented_names = section_entry_names(&sections);
+        let mut contents = render_env_contents(project, &sections, &shared_names, |entry| {
+            render_copy_entry(
+                entry,
+                &existing,
+                execute_templates,
+                overwrite,
+                &project.root,
+            )
+        });
+        append_local_only_entries(&mut contents, &existing_active_entries, &documented_names);
+        contents
+    } else {
+        render_additive_env_contents(
+            project,
+            &env_path,
+            &sections,
+            &shared_names,
             execute_templates,
-            overwrite,
-            &project.root,
-        )
-    });
-    append_local_only_entries(&mut env_contents, &existing_entries, &documented_names);
+        )?
+    };
 
     let mut writes = vec![FileWritePlan {
         path: env_path,
@@ -177,6 +189,78 @@ fn render_env_contents(
     }
 
     format!("{}\n", output.join("\n").trim_end())
+}
+
+fn render_additive_env_contents(
+    project: &Project,
+    env_path: &Path,
+    sections: &[ExampleSection],
+    shared_names: &BTreeSet<String>,
+    execute_templates: bool,
+) -> Result<String> {
+    let existing_contents = if env_path.exists() {
+        fs::read_to_string(env_path)
+            .with_context(|| format!("failed to read {}", env_path.display()))?
+    } else {
+        String::new()
+    };
+    let active_names = dotenv::parse_active_file(env_path)?
+        .into_iter()
+        .map(|entry| entry.key)
+        .collect::<BTreeSet<_>>();
+    let all_assignment_names = dotenv::parse_file(env_path)?
+        .into_iter()
+        .map(|entry| entry.key)
+        .collect::<BTreeSet<_>>();
+
+    let missing_sections = sections
+        .iter()
+        .filter_map(|section| {
+            let entries = section
+                .entries
+                .iter()
+                .filter(|entry| {
+                    if entry.commented {
+                        !all_assignment_names.contains(&entry.key)
+                    } else {
+                        !active_names.contains(&entry.key)
+                    }
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+
+            (!entries.is_empty()).then(|| ExampleSection {
+                app_rel: section.app_rel.clone(),
+                entries,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let additions = render_env_contents(project, &missing_sections, shared_names, |entry| {
+        let value = copy_value(&entry.value, execute_templates, &project.root);
+        render_entry_line(entry, &value, true, entry.quote)
+    });
+    if additions.trim().is_empty() {
+        Ok(existing_contents)
+    } else {
+        let contents = append_contents(existing_contents, additions);
+        Ok(dotenv::format_contents(&contents))
+    }
+}
+
+fn append_contents(existing: String, additions: String) -> String {
+    let additions = additions.trim_end();
+    if additions.is_empty() {
+        return existing;
+    }
+
+    let mut output = existing.trim_end().to_string();
+    if !output.is_empty() {
+        output.push_str("\n\n");
+    }
+    output.push_str(additions);
+    output.push('\n');
+    output
 }
 
 fn render_sorted_entries(
@@ -517,7 +601,8 @@ mod tests {
         let env_contents = write_contents(&plan, ".env");
 
         assert!(env_contents.contains("DATABASE_URL=file:./local.db"));
-        assert!(env_contents.contains("# ---- local-only ----\nDEV_DISABLE_EMAILS=true"));
+        assert!(env_contents.contains("DEV_DISABLE_EMAILS=true"));
+        assert!(!env_contents.contains("# ---- local-only ----"));
     }
 
     #[test]
@@ -645,6 +730,87 @@ mod tests {
         let env_contents = write_contents(&plan, ".env");
 
         assert!(env_contents.contains("PORT=3000\nPORT=3001\nPORT=3002"));
+    }
+
+    #[test]
+    fn copy_preserves_active_and_commented_duplicates_for_existing_optional_var() {
+        let tempdir = tempfile::tempdir().unwrap();
+        fs::write(
+            tempdir.path().join(".env"),
+            "PORT=3000\n# PORT=3001\n# PORT=3002\n",
+        )
+        .unwrap();
+        fs::write(tempdir.path().join(".env.example"), "# PORT=3000\n").unwrap();
+
+        let project = Project {
+            root: tempdir.path().to_path_buf(),
+            is_monorepo: false,
+            workspaces: vec![test_workspace(tempdir.path(), ".")],
+        };
+
+        let plan = build_copy_plan(&project, false, false).unwrap();
+        let env_contents = write_contents(&plan, ".env");
+
+        assert_eq!(env_contents, "PORT=3000\n# PORT=3001\n# PORT=3002\n");
+    }
+
+    #[test]
+    fn copy_treats_commented_local_assignment_as_presence_for_optional_example_only() {
+        let tempdir = tempfile::tempdir().unwrap();
+        fs::write(tempdir.path().join(".env"), "# PORT=3001\n").unwrap();
+        fs::write(
+            tempdir.path().join(".env.example"),
+            "# PORT=3000\nHOST=localhost\n",
+        )
+        .unwrap();
+
+        let project = Project {
+            root: tempdir.path().to_path_buf(),
+            is_monorepo: false,
+            workspaces: vec![test_workspace(tempdir.path(), ".")],
+        };
+
+        let plan = build_copy_plan(&project, false, false).unwrap();
+        let env_contents = write_contents(&plan, ".env");
+
+        assert!(env_contents.contains("# PORT=3001"));
+        assert!(!env_contents.contains("# PORT=3000"));
+        assert!(env_contents.contains("HOST=localhost"));
+
+        fs::write(tempdir.path().join(".env.example"), "PORT=3000\n").unwrap();
+        let plan = build_copy_plan(&project, false, false).unwrap();
+        let env_contents = write_contents(&plan, ".env");
+
+        assert!(env_contents.contains("# PORT=3001\nPORT=3000"));
+    }
+
+    #[test]
+    fn copy_formats_appended_required_value_next_to_existing_commented_variant() {
+        let tempdir = tempfile::tempdir().unwrap();
+        fs::write(
+            tempdir.path().join(".env"),
+            "# DATABASE_URL=\"file:./local.db\"\nAPI_KEY=api\n",
+        )
+        .unwrap();
+        fs::write(
+            tempdir.path().join(".env.example"),
+            "DATABASE_URL=\"file:./local.db\"\n",
+        )
+        .unwrap();
+
+        let project = Project {
+            root: tempdir.path().to_path_buf(),
+            is_monorepo: false,
+            workspaces: vec![test_workspace(tempdir.path(), ".")],
+        };
+
+        let plan = build_copy_plan(&project, false, false).unwrap();
+        let env_contents = write_contents(&plan, ".env");
+
+        assert_eq!(
+            env_contents,
+            "API_KEY=api\n\n# DATABASE_URL=\"file:./local.db\"\nDATABASE_URL=\"file:./local.db\"\n"
+        );
     }
 
     fn write_contents<'a>(plan: &'a CopyPlan, name: &str) -> &'a str {

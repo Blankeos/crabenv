@@ -11,6 +11,12 @@ pub fn example_path(workspace: &Workspace) -> PathBuf {
     workspace.root.join(".env.example")
 }
 
+fn parse_entry_key(line: &str) -> Option<(String, bool)> {
+    parse_assignment_key(line)
+        .map(|key| (key, false))
+        .or_else(|| parse_commented_assignment_key(line).map(|key| (key, true)))
+}
+
 fn parse_commented_assignment_key(line: &str) -> Option<String> {
     let trimmed = line.trim_start();
     let body = trimmed.strip_prefix('#')?.trim_start();
@@ -115,9 +121,7 @@ fn parse_section_body(section: RawSection) -> ParsedSection {
     let mut saw_entry_or_loose = false;
 
     for line in section.lines {
-        if let Some(key) =
-            parse_assignment_key(&line).or_else(|| parse_commented_assignment_key(&line))
-        {
+        if let Some((key, _commented)) = parse_entry_key(&line) {
             let mut lines = Vec::new();
             if saw_entry_or_loose {
                 lines.append(&mut pending);
@@ -344,6 +348,44 @@ DATABASE_URL=file:./db
     }
 
     #[test]
+    fn format_contents_keeps_commented_and_active_same_key_together() {
+        let input = r#"# DATABASE_URL=""
+API_KEY=api
+DATABASE_URL=""
+"#;
+
+        let formatted = format_contents(input);
+
+        assert_eq!(
+            formatted,
+            r#"API_KEY=api
+
+# DATABASE_URL=""
+DATABASE_URL=""
+"#
+        );
+    }
+
+    #[test]
+    fn format_contents_repairs_local_only_duplicate_of_commented_template() {
+        let input = r#"# DATABASE_URL="file:/tmp/local.db"
+
+# --- local-only ---
+
+DATABASE_URL="file:/tmp/local.db"
+"#;
+
+        let formatted = format_contents(input);
+
+        assert_eq!(
+            formatted,
+            r#"# DATABASE_URL="file:/tmp/local.db"
+DATABASE_URL="file:/tmp/local.db"
+"#
+        );
+    }
+
+    #[test]
     fn parse_file_marks_commented_assignments_without_activating_them() {
         let tempdir = tempfile::tempdir().unwrap();
         let path = tempdir.path().join(".env.example");
@@ -453,6 +495,7 @@ pub fn format_contents(contents: &str) -> String {
     if sections.iter().any(|section| section.header.is_some()) {
         sections.sort_by(|left, right| compare_sections(left, right));
     }
+    move_local_only_duplicates_next_to_templates(&mut sections);
 
     let mut output = Vec::new();
     for section in sections {
@@ -467,6 +510,72 @@ pub fn format_contents(contents: &str) -> String {
     }
 
     format!("{}\n", output.join("\n").trim_end())
+}
+
+fn move_local_only_duplicates_next_to_templates(sections: &mut Vec<RawSection>) {
+    let template_targets = sections
+        .iter()
+        .enumerate()
+        .filter(|(_, section)| !is_local_only_section(section))
+        .flat_map(|(index, section)| {
+            section.lines.iter().filter_map(move |line| {
+                let (key, commented) = parse_entry_key(line)?;
+                commented.then_some((key, index))
+            })
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+
+    if template_targets.is_empty() {
+        return;
+    }
+
+    let mut moved = Vec::<(usize, String, String)>::new();
+    for section in sections
+        .iter_mut()
+        .filter(|section| is_local_only_section(section))
+    {
+        let mut kept = Vec::new();
+        for line in std::mem::take(&mut section.lines) {
+            if let Some(key) = parse_assignment_key(&line) {
+                if let Some(target) = template_targets.get(&key) {
+                    moved.push((*target, key, line));
+                    continue;
+                }
+            }
+            kept.push(line);
+        }
+        section.lines = kept;
+    }
+
+    for (target, key, line) in moved {
+        insert_after_key_block(&mut sections[target].lines, &key, line);
+    }
+
+    sections.retain(|section| {
+        !is_local_only_section(section) || section.lines.iter().any(|line| !line.trim().is_empty())
+    });
+}
+
+fn insert_after_key_block(lines: &mut Vec<String>, key: &str, line: String) {
+    let insert_at = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            parse_entry_key(line)
+                .filter(|(line_key, _)| line_key == key)
+                .map(|_| index + 1)
+        })
+        .last()
+        .unwrap_or(lines.len());
+    lines.insert(insert_at, line);
+}
+
+fn is_local_only_section(section: &RawSection) -> bool {
+    section
+        .header
+        .as_deref()
+        .map(section_label)
+        .is_some_and(|label| label.eq_ignore_ascii_case("local-only"))
 }
 
 pub fn local_path(project: &Project, workspace: &Workspace) -> PathBuf {
