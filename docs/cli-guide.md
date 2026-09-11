@@ -21,10 +21,10 @@ crabenv doctor --fix --yes # apply safe fixes
 GitHub Actions sinks are supported through managed `gha-env` and `gha-echo` blocks. See [Sinks](./sinks/index.md).
 When a managed sink covers a schema variable, `crabenv list -p`/`crabenv ls -p` includes `sinks` in that variable's surfaces, and `crabenv doctor` marks the `sinks` checklist cell with `[x]`.
 
-CRUD commands (wizard-like when used without args, but unusable for agents):
+CRUD commands:
 
 ```sh
-crabenv list -p
+crabenv list -p # notice -p since without it, it's interactive (difficult to use for agents).
 crabenv list -p --json
 crabenv add VARIABLE_NAME --example "value" --optional
 crabenv update VARIABLE_NAME
