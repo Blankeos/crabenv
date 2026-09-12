@@ -2,6 +2,11 @@ use anyhow::{anyhow, bail, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use oxc_allocator::Allocator;
+use oxc_ast::ast::{Argument, Declaration, Expression, ObjectPropertyKind, Statement};
+use oxc_parser::Parser;
+use oxc_span::{GetSpan, SourceType};
+
 use crate::models::{Issue, Scope, Severity, SourceKind, VarMutation, VarSource, Workspace};
 use crate::util::{is_valid_var_name, line_number_at};
 
@@ -313,6 +318,428 @@ pub fn upsert_schema_expr(
 
     fs::write(path, contents)?;
     Ok(())
+}
+
+/// Validate a metadata-only TypeScript update without writing.
+pub fn validate_metadata_update(
+    app: &Workspace,
+    variable: &str,
+    scope: &Scope,
+    description: Option<String>,
+    optional: Option<bool>,
+    default_value: Option<String>,
+) -> Result<()> {
+    build_metadata_contents(app, variable, scope, description, optional, default_value).map(|_| ())
+}
+
+/// Conservative metadata-only update: reuse the original zod expression
+/// verbatim and only touch the outer `.optional()` / `.default(...)`
+/// chain when explicitly requested. Descriptions only touch leading comments.
+pub fn update_schema_metadata(
+    app: &Workspace,
+    variable: &str,
+    scope: &Scope,
+    description: Option<String>,
+    optional: Option<bool>,
+    default_value: Option<String>,
+) -> Result<()> {
+    let (path, next) =
+        build_metadata_contents(app, variable, scope, description, optional, default_value)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, next)?;
+    Ok(())
+}
+
+fn build_metadata_contents(
+    app: &Workspace,
+    variable: &str,
+    scope: &Scope,
+    description: Option<String>,
+    optional: Option<bool>,
+    default_value: Option<String>,
+) -> Result<(PathBuf, String)> {
+    let (path, label) = match scope {
+        Scope::Public if should_use_plain_schema(app) => (plain_schema_path(app), "client"),
+        Scope::Private if should_use_plain_schema(app) => (plain_schema_path(app), "server"),
+        Scope::Public => (public_schema_path(app), "client"),
+        Scope::Private => (private_schema_path(app), "server"),
+        Scope::Unknown => bail!("unknown scope for '{variable}'"),
+    };
+    if !path.exists() {
+        bail!("TypeScript schema not found: {}", path.display());
+    }
+    let contents = fs::read_to_string(&path)?;
+    let analysis = analyze_schema_expr(&contents, label, variable).ok_or_else(|| {
+        anyhow!(
+            "'{variable}' was not found in {label} object; edit the file manually or use an explicit type flag to recreate it"
+        )
+    })?;
+
+    let new_expr = if let Some(default) = default_value.as_deref() {
+        if !analysis.is_z {
+            bail!(unsupported_msg(variable, &analysis.raw));
+        }
+        let lit = default_literal(&analysis.kind, default, variable)?;
+        format!("{}{}", analysis.base.trim(), lit)
+    } else if let Some(want_optional) = optional {
+        if !analysis.is_z {
+            bail!(unsupported_msg(variable, &analysis.raw));
+        }
+        if want_optional {
+            format!("{}.optional()", analysis.base.trim())
+        } else {
+            analysis.base.trim().to_string()
+        }
+    } else {
+        analysis.raw.trim().to_string()
+    };
+
+    let new_leading_opt: Option<String> = match description {
+        None => None,
+        Some(desc) => {
+            let trimmed = desc.trim();
+            if trimmed.is_empty() {
+                Some(String::new())
+            } else {
+                Some(
+                    trimmed
+                        .lines()
+                        .map(str::trim)
+                        .filter(|line| !line.is_empty())
+                        .map(|line| format!("    // {line}"))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                )
+            }
+        }
+    };
+
+    let mut next = contents.clone();
+    if new_expr != analysis.raw.trim() {
+        let (s, e) = analysis.value_span;
+        next.replace_range(s..e, &new_expr);
+    }
+    if let Some(new_leading) = new_leading_opt {
+        let (ls, le) = leading_comment_range(&next, analysis.prop_start);
+        if new_leading.is_empty() {
+            if ls != le {
+                next.replace_range(ls..le, "");
+            }
+        } else if ls == le {
+            next.insert_str(ls, &format!("{new_leading}\n"));
+        } else {
+            next.replace_range(ls..le, &format!("{new_leading}\n"));
+        }
+    }
+    Ok((path, next))
+}
+
+fn unsupported_msg(variable: &str, raw: &str) -> String {
+    let trimmed = raw.trim();
+    format!(
+        "crabenv update {variable}: unsupported zod expression '{trimmed}'; use explicit --string/--numeric/--number/--boolean/--enum/--testRegex to replace it or edit the file manually"
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ZodKind {
+    Number,
+    Boolean,
+    StringLike,
+    Unknown,
+}
+
+struct SchemaAnalysis {
+    raw: String,
+    base: String,
+    kind: ZodKind,
+    is_z: bool,
+    prop_start: usize,
+    value_span: (usize, usize),
+}
+
+fn analyze_schema_expr(contents: &str, label: &str, variable: &str) -> Option<SchemaAnalysis> {
+    let allocator = Allocator::default();
+    let ret = Parser::new(&allocator, contents, SourceType::ts()).parse();
+    let program = ret.program;
+    let (prop_span, value_expr) = find_schema_property(&program, label, variable)?;
+    let value_span = value_expr.span();
+    let raw = contents
+        .get(value_span.start as usize..value_span.end as usize)?
+        .to_string();
+    let base_expr = strip_root_optional_default(value_expr).ok()?;
+    let base_span = base_expr.span();
+    let base = contents
+        .get(base_span.start as usize..base_span.end as usize)?
+        .to_string();
+    let (is_z, kind) = zod_kind(base_expr);
+    Some(SchemaAnalysis {
+        raw,
+        base,
+        kind,
+        is_z,
+        prop_start: prop_span.start as usize,
+        value_span: (value_span.start as usize, value_span.end as usize),
+    })
+}
+
+fn find_schema_property<'a>(
+    program: &'a oxc_ast::ast::Program<'a>,
+    label: &str,
+    variable: &str,
+) -> Option<(oxc_span::Span, &'a Expression<'a>)> {
+    for stmt in &program.body {
+        let decls = match stmt {
+            Statement::ExportNamedDeclaration(export) => match &export.declaration {
+                Some(Declaration::VariableDeclaration(var_decl)) => Some(&var_decl.declarations),
+                _ => None,
+            },
+            Statement::VariableDeclaration(var_decl) => Some(&var_decl.declarations),
+            _ => None,
+        };
+        let Some(decls) = decls else { continue };
+        for decl in decls {
+            let Some(init) = &decl.init else { continue };
+            if let Some(found) = find_in_create_env(init, label, variable) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+fn find_in_create_env<'a>(
+    init: &'a Expression<'a>,
+    label: &str,
+    variable: &str,
+) -> Option<(oxc_span::Span, &'a Expression<'a>)> {
+    let mut cur = init;
+    loop {
+        match cur {
+            Expression::ParenthesizedExpression(paren) => cur = &paren.expression,
+            Expression::TSAsExpression(e) => cur = &e.expression,
+            Expression::TSSatisfiesExpression(e) => cur = &e.expression,
+            Expression::TSNonNullExpression(e) => cur = &e.expression,
+            _ => break,
+        }
+    }
+    let Expression::CallExpression(call) = cur else {
+        return None;
+    };
+    for arg in &call.arguments {
+        let Argument::ObjectExpression(obj) = arg else {
+            continue;
+        };
+        for prop_kind in &obj.properties {
+            let ObjectPropertyKind::ObjectProperty(prop) = prop_kind else {
+                continue;
+            };
+            if prop.key.static_name().as_deref() != Some(label) {
+                continue;
+            }
+            let Expression::ObjectExpression(inner) = &prop.value else {
+                continue;
+            };
+            for inner_kind in &inner.properties {
+                let ObjectPropertyKind::ObjectProperty(inner_prop) = inner_kind else {
+                    continue;
+                };
+                if inner_prop.key.static_name().as_deref() == Some(variable) {
+                    return Some((inner_prop.span, &inner_prop.value));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Surgically strip outer `.optional()` / `.default(...)` calls using AST.
+fn strip_root_optional_default<'a>(mut expr: &'a Expression<'a>) -> Result<&'a Expression<'a>> {
+    loop {
+        match expr {
+            Expression::CallExpression(call) => {
+                let Expression::StaticMemberExpression(member) = &call.callee else {
+                    break;
+                };
+                let name = member.property.name.as_str();
+                if name == "optional" {
+                    if !call.arguments.is_empty() {
+                        bail!("unsupported optional with args");
+                    }
+                    expr = &member.object;
+                } else if name == "default" {
+                    if call.arguments.len() != 1 {
+                        bail!("unsupported default arity");
+                    }
+                    expr = &member.object;
+                } else {
+                    break;
+                }
+            }
+            Expression::ParenthesizedExpression(paren) => expr = &paren.expression,
+            Expression::ChainExpression(_)
+            | Expression::TSAsExpression(_)
+            | Expression::TSSatisfiesExpression(_)
+            | Expression::TSNonNullExpression(_)
+            | Expression::TSTypeAssertion(_) => {
+                bail!("unsupported wrapper")
+            }
+            _ => break,
+        }
+    }
+    Ok(expr)
+}
+
+fn zod_kind(expr: &Expression) -> (bool, ZodKind) {
+    let mut names = Vec::new();
+    let mut is_z = false;
+    let mut unsupported = false;
+    collect_chain(expr, &mut names, &mut is_z, &mut unsupported);
+    if unsupported || !is_z {
+        return (is_z, ZodKind::Unknown);
+    }
+    if names
+        .iter()
+        .any(|n| n == "preprocess" || n == "transform" || n == "pipe")
+    {
+        return (true, ZodKind::Unknown);
+    }
+    if names.iter().any(|n| n == "number") {
+        return (true, ZodKind::Number);
+    }
+    if names.iter().any(|n| n == "boolean") {
+        return (true, ZodKind::Boolean);
+    }
+    if names.iter().any(|n| n == "string" || n == "enum") {
+        return (true, ZodKind::StringLike);
+    }
+    (true, ZodKind::Unknown)
+}
+
+fn collect_chain(
+    expr: &Expression,
+    names: &mut Vec<String>,
+    is_z: &mut bool,
+    unsupported: &mut bool,
+) {
+    match expr {
+        Expression::CallExpression(call) => {
+            collect_chain(&call.callee, names, is_z, unsupported);
+        }
+        Expression::StaticMemberExpression(member) => {
+            collect_chain(&member.object, names, is_z, unsupported);
+            names.push(member.property.name.as_str().to_string());
+        }
+        Expression::ComputedMemberExpression(member) => {
+            collect_chain(&member.object, names, is_z, unsupported);
+            *unsupported = true;
+        }
+        Expression::PrivateFieldExpression(_) => *unsupported = true,
+        Expression::Identifier(ident) => {
+            if ident.name.as_str() == "z" {
+                *is_z = true;
+            }
+        }
+        Expression::ParenthesizedExpression(paren) => {
+            collect_chain(&paren.expression, names, is_z, unsupported);
+        }
+        Expression::ChainExpression(_)
+        | Expression::TSAsExpression(_)
+        | Expression::TSSatisfiesExpression(_)
+        | Expression::TSNonNullExpression(_)
+        | Expression::TSTypeAssertion(_) => *unsupported = true,
+        _ => {}
+    }
+}
+
+fn default_literal(kind: &ZodKind, default: &str, variable: &str) -> Result<String> {
+    match kind {
+        ZodKind::Number => {
+            if !is_valid_number_literal(default) {
+                bail!(
+                    "crabenv update {variable}: invalid default '{default}' for number schema; edit the file manually"
+                );
+            }
+            Ok(format!(".default({})", default.trim()))
+        }
+        ZodKind::Boolean => {
+            let trimmed = default.trim();
+            if trimmed != "true" && trimmed != "false" {
+                bail!(
+                    "crabenv update {variable}: invalid default '{default}' for boolean schema; edit the file manually"
+                );
+            }
+            Ok(format!(".default({trimmed})"))
+        }
+        ZodKind::StringLike => Ok(format!(".default({:?})", default)),
+        ZodKind::Unknown => bail!(
+            "crabenv update {variable}: unsupported zod expression for default; use explicit --string/--numeric/--number/--boolean/--enum/--testRegex to replace it or edit the file manually"
+        ),
+    }
+}
+
+fn is_valid_number_literal(value: &str) -> bool {
+    let s = value.trim();
+    let s = s
+        .strip_prefix('+')
+        .or_else(|| s.strip_prefix('-'))
+        .unwrap_or(s);
+    if s.is_empty() {
+        return false;
+    }
+    let (mantissa, exp) = match s.split_once(['e', 'E']) {
+        Some((m, e)) => (m, Some(e)),
+        None => (s, None),
+    };
+    if let Some(e) = exp {
+        let e = e
+            .strip_prefix('+')
+            .or_else(|| e.strip_prefix('-'))
+            .unwrap_or(e);
+        if e.is_empty() || !e.bytes().all(|b| b.is_ascii_digit()) {
+            return false;
+        }
+    }
+    match mantissa.split_once('.') {
+        Some((int, frac)) => {
+            if int.is_empty() || frac.is_empty() {
+                return false;
+            }
+            int.bytes().all(|b| b.is_ascii_digit()) && frac.bytes().all(|b| b.is_ascii_digit())
+        }
+        None => !mantissa.is_empty() && mantissa.bytes().all(|b| b.is_ascii_digit()),
+    }
+}
+
+fn leading_comment_range(contents: &str, prop_start: usize) -> (usize, usize) {
+    let prop_start = prop_start.min(contents.len());
+    let line_start = contents[..prop_start]
+        .rfind('\n')
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let mut cur = line_start;
+    let mut leading_start = line_start;
+    loop {
+        if cur == 0 {
+            break;
+        }
+        let prev_end = cur - 1;
+        let prev_start = contents[..prev_end].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let mut line = &contents[prev_start..prev_end];
+        line = line.strip_suffix('\r').unwrap_or(line);
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            break;
+        }
+        if !is_comment_only_line(trimmed) {
+            break;
+        }
+        leading_start = prev_start;
+        cur = prev_start;
+    }
+    (leading_start, line_start)
 }
 
 fn ensure_schema_file(path: &Path, scope: &Scope) -> Result<()> {
@@ -1391,5 +1818,330 @@ export const env = createEnv({
         assert!(!should_use_plain_schema(&workspace));
         assert_eq!(private.len(), 1);
         assert_eq!(private[0].name, "SPLIT_ONLY");
+    }
+
+    fn metadata_test_workspace(dir: &tempfile::TempDir) -> Workspace {
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(
+            dir.path().join("src/env.private.ts"),
+            r#"import { createEnv } from "@t3-oss/env-core";
+import { z } from "zod";
+
+export const privateEnv = createEnv({
+  runtimeEnv: process.env,
+  server: {
+    DATABASE_URL: z.string().url(),
+    API_KEY: z.string().min(32),
+    TOKEN: z.string().regex(/^[A-Z]+$/),
+  },
+});
+"#,
+        )
+        .unwrap();
+        Workspace {
+            root: dir.path().to_path_buf(),
+            rel: PathBuf::from("."),
+            kind: crate::models::WorkspaceKind::App,
+            framework: "typescript".to_string(),
+        }
+    }
+
+    #[test]
+    fn metadata_description_preserves_url_min_and_regex() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = metadata_test_workspace(&dir);
+
+        update_schema_metadata(
+            &workspace,
+            "DATABASE_URL",
+            &Scope::Private,
+            Some("DB docs".to_string()),
+            None,
+            None,
+        )
+        .unwrap();
+        update_schema_metadata(
+            &workspace,
+            "API_KEY",
+            &Scope::Private,
+            Some("Key docs".to_string()),
+            None,
+            None,
+        )
+        .unwrap();
+        update_schema_metadata(
+            &workspace,
+            "TOKEN",
+            &Scope::Private,
+            Some("Token docs".to_string()),
+            None,
+            None,
+        )
+        .unwrap();
+
+        let contents = fs::read_to_string(private_schema_path(&workspace)).unwrap();
+        assert!(contents.contains("DATABASE_URL: z.string().url(),"));
+        assert!(contents.contains("API_KEY: z.string().min(32),"));
+        assert!(contents.contains(r"TOKEN: z.string().regex(/^[A-Z]+$/),"));
+        assert!(!contents.contains(r"/^-?\d+(\.\d+)?$/"));
+    }
+
+    #[test]
+    fn metadata_optional_and_default_keep_validators() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = metadata_test_workspace(&dir);
+
+        update_schema_metadata(
+            &workspace,
+            "API_KEY",
+            &Scope::Private,
+            None,
+            Some(true),
+            None,
+        )
+        .unwrap();
+        update_schema_metadata(
+            &workspace,
+            "DATABASE_URL",
+            &Scope::Private,
+            None,
+            None,
+            Some("https://example.com".to_string()),
+        )
+        .unwrap();
+
+        let contents = fs::read_to_string(private_schema_path(&workspace)).unwrap();
+        assert!(contents.contains("API_KEY: z.string().min(32).optional(),"));
+        assert!(
+            contents.contains(r#"DATABASE_URL: z.string().url().default("https://example.com"),"#)
+        );
+    }
+
+    #[test]
+    fn metadata_unsupported_syntax_fails_before_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(
+            dir.path().join("src/env.private.ts"),
+            r#"import { createEnv } from "@t3-oss/env-core";
+import { z } from "zod";
+
+const helper = z.string();
+export const privateEnv = createEnv({
+  runtimeEnv: process.env,
+  server: {
+    WEIRD: helper,
+  },
+});
+"#,
+        )
+        .unwrap();
+        let workspace = Workspace {
+            root: dir.path().to_path_buf(),
+            rel: PathBuf::from("."),
+            kind: crate::models::WorkspaceKind::App,
+            framework: "typescript".to_string(),
+        };
+        let before = fs::read_to_string(private_schema_path(&workspace)).unwrap();
+
+        let err =
+            update_schema_metadata(&workspace, "WEIRD", &Scope::Private, None, Some(true), None)
+                .unwrap_err();
+
+        assert!(err.to_string().contains("unsupported"));
+        assert_eq!(
+            fs::read_to_string(private_schema_path(&workspace)).unwrap(),
+            before
+        );
+    }
+
+    #[test]
+    fn metadata_description_on_helper_schema_works() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(
+            dir.path().join("src/env.private.ts"),
+            r#"import { createEnv } from "@t3-oss/env-core";
+import { z } from "zod";
+
+const helper = z.string();
+export const privateEnv = createEnv({
+  runtimeEnv: process.env,
+  server: {
+    WEIRD: helper,
+  },
+});
+"#,
+        )
+        .unwrap();
+        let workspace = Workspace {
+            root: dir.path().to_path_buf(),
+            rel: PathBuf::from("."),
+            kind: crate::models::WorkspaceKind::App,
+            framework: "typescript".to_string(),
+        };
+        update_schema_metadata(
+            &workspace,
+            "WEIRD",
+            &Scope::Private,
+            Some("Helper docs".to_string()),
+            None,
+            None,
+        )
+        .unwrap();
+        let contents = fs::read_to_string(private_schema_path(&workspace)).unwrap();
+        assert!(contents.contains("// Helper docs"));
+        assert!(contents.contains("WEIRD: helper,"));
+    }
+
+    #[test]
+    fn metadata_regex_with_slashes_quotes_and_delimiters() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(
+            dir.path().join("src/env.private.ts"),
+            r#"import { createEnv } from "@t3-oss/env-core";
+import { z } from "zod";
+
+export const privateEnv = createEnv({
+  runtimeEnv: process.env,
+  server: {
+    COMPLEX: z.string().regex(/^a\/b(,c)?["']+$/, "needs / and \"quotes\""),
+  },
+});
+"#,
+        )
+        .unwrap();
+        let workspace = Workspace {
+            root: dir.path().to_path_buf(),
+            rel: PathBuf::from("."),
+            kind: crate::models::WorkspaceKind::App,
+            framework: "typescript".to_string(),
+        };
+        update_schema_metadata(
+            &workspace,
+            "COMPLEX",
+            &Scope::Private,
+            Some("Complex docs".to_string()),
+            None,
+            None,
+        )
+        .unwrap();
+        let contents = fs::read_to_string(private_schema_path(&workspace)).unwrap();
+        assert!(contents.contains(
+            r#"COMPLEX: z.string().regex(/^a\/b(,c)?["']+$/, "needs / and \"quotes\""),"#
+        ));
+
+        update_schema_metadata(
+            &workspace,
+            "COMPLEX",
+            &Scope::Private,
+            None,
+            Some(true),
+            None,
+        )
+        .unwrap();
+        let contents = fs::read_to_string(private_schema_path(&workspace)).unwrap();
+        assert!(contents.contains(
+            r#"COMPLEX: z.string().regex(/^a\/b(,c)?["']+$/, "needs / and \"quotes\"").optional(),"#
+        ));
+    }
+
+    #[test]
+    fn metadata_embedded_comments_preserved() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(
+            dir.path().join("src/env.private.ts"),
+            r#"import { createEnv } from "@t3-oss/env-core";
+import { z } from "zod";
+
+export const privateEnv = createEnv({
+  runtimeEnv: process.env,
+  server: {
+    TOKEN: z.string() /* embedded: keep */ .regex(/^[A-Z]+$/),
+  },
+});
+"#,
+        )
+        .unwrap();
+        let workspace = Workspace {
+            root: dir.path().to_path_buf(),
+            rel: PathBuf::from("."),
+            kind: crate::models::WorkspaceKind::App,
+            framework: "typescript".to_string(),
+        };
+        update_schema_metadata(
+            &workspace,
+            "TOKEN",
+            &Scope::Private,
+            Some("Token docs".to_string()),
+            None,
+            None,
+        )
+        .unwrap();
+        let contents = fs::read_to_string(private_schema_path(&workspace)).unwrap();
+        assert!(contents.contains("/* embedded: keep */"));
+        assert!(contents.contains(r"TOKEN: z.string() /* embedded: keep */ .regex(/^[A-Z]+$/),"));
+
+        update_schema_metadata(&workspace, "TOKEN", &Scope::Private, None, Some(true), None)
+            .unwrap();
+        let contents = fs::read_to_string(private_schema_path(&workspace)).unwrap();
+        assert!(contents.contains("/* embedded: keep */"));
+        assert!(contents.contains(r".regex(/^[A-Z]+$/).optional(),"));
+    }
+
+    #[test]
+    fn metadata_invalid_number_default_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(
+            dir.path().join("src/env.private.ts"),
+            r#"import { createEnv } from "@t3-oss/env-core";
+import { z } from "zod";
+
+export const privateEnv = createEnv({
+  runtimeEnv: process.env,
+  server: {
+    PORT: z.coerce.number(),
+  },
+});
+"#,
+        )
+        .unwrap();
+        let workspace = Workspace {
+            root: dir.path().to_path_buf(),
+            rel: PathBuf::from("."),
+            kind: crate::models::WorkspaceKind::App,
+            framework: "typescript".to_string(),
+        };
+        let before = fs::read_to_string(private_schema_path(&workspace)).unwrap();
+        for bad in ["not-a-number", "process.exit()", "\"123\""] {
+            let err = update_schema_metadata(
+                &workspace,
+                "PORT",
+                &Scope::Private,
+                None,
+                None,
+                Some(bad.to_string()),
+            )
+            .unwrap_err();
+            assert!(err.to_string().contains("invalid") || err.to_string().contains("unsupported"));
+            assert_eq!(
+                fs::read_to_string(private_schema_path(&workspace)).unwrap(),
+                before
+            );
+        }
+        update_schema_metadata(
+            &workspace,
+            "PORT",
+            &Scope::Private,
+            None,
+            None,
+            Some("3000".to_string()),
+        )
+        .unwrap();
+        let contents = fs::read_to_string(private_schema_path(&workspace)).unwrap();
+        assert!(contents.contains("PORT: z.coerce.number().default(3000),"));
     }
 }

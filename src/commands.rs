@@ -765,6 +765,43 @@ pub fn run_add_or_update(project: &Project, args: MutateArgs, update: bool) -> R
     };
     let schema_update = update && has_schema_update_edit_flags(&args);
 
+    // Fail fast before any dotenv/schema writes when a metadata-only
+    // TypeScript update cannot preserve validators.
+    if update {
+        for app in &selection.apps {
+            if app.framework == "python" || app.framework == "rust" {
+                continue;
+            }
+            let Some(record) = graph
+                .as_ref()
+                .and_then(|graph| graph.get(&(app.rel.clone(), variable.to_string())))
+                .filter(|record| {
+                    record_has_schema_surface(record) || record_has_template_surface(record)
+                })
+            else {
+                continue;
+            };
+            if !schema_update || !record_has_schema_surface(record) {
+                continue;
+            }
+            if has_type_change_flags(&args) {
+                continue;
+            }
+            let target_scope = update_scope_from_args(record, &args);
+            if target_scope != record.scope && !matches!(record.scope, Scope::Unknown) {
+                continue;
+            }
+            typescript::validate_metadata_update(
+                app,
+                variable,
+                &record.scope,
+                args.description.clone(),
+                args.optional,
+                args.default_value.clone(),
+            )?;
+        }
+    }
+
     for app in &selection.apps {
         if update {
             let record = graph
@@ -796,8 +833,27 @@ pub fn run_add_or_update(project: &Project, args: MutateArgs, update: bool) -> R
                 continue;
             }
 
+            let target_scope = update_scope_from_args(record, &args);
+            let is_move = target_scope != record.scope && !matches!(record.scope, Scope::Unknown);
+            let is_typescript = app.framework != "python" && app.framework != "rust";
+            if is_typescript
+                && record_has_schema_surface(record)
+                && !has_type_change_flags(&args)
+                && !is_move
+            {
+                typescript::update_schema_metadata(
+                    app,
+                    variable,
+                    &record.scope,
+                    args.description.clone(),
+                    args.optional,
+                    args.default_value.clone(),
+                )?;
+                continue;
+            }
+
             let mutation = update_mutation_from_record(record, &args);
-            let scope = update_scope_from_args(record, &args);
+            let scope = target_scope;
 
             if app.framework == "python" {
                 python::upsert_schema(app, &mutation)?;
@@ -864,6 +920,16 @@ fn upsert_mutation_example(
 
 fn has_update_edit_flags(args: &MutateArgs) -> bool {
     args.example.is_some() || has_schema_update_edit_flags(args)
+}
+
+fn has_type_change_flags(args: &MutateArgs) -> bool {
+    args.string
+        || args.numeric
+        || args.number
+        || args.boolean
+        || args.enum_values.is_some()
+        || args.test_regex.is_some()
+        || args.test_regex_message.is_some()
 }
 
 fn has_schema_update_edit_flags(args: &MutateArgs) -> bool {
@@ -1982,6 +2048,388 @@ export const privateEnv = createEnv({
         let example = fs::read_to_string(tempdir.path().join(".env.example")).unwrap();
         assert!(example.contains("# WEIRDO=weird"));
         assert!(!example.contains("\nWEIRDO=weird"));
+    }
+
+    fn write_custom_validators_project(root: &Path) {
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(
+            root.join("package.json"),
+            r#"{"dependencies":{"zod":"latest"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join(".env.example"),
+            "DATABASE_URL=file:./local.db\nAPI_KEY=abc\nTOKEN=ABC\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("src/env.private.ts"),
+            r#"import { createEnv } from "@t3-oss/env-core";
+import { z } from "zod";
+
+export const privateEnv = createEnv({
+  runtimeEnv: process.env,
+  server: {
+    DATABASE_URL: z.string().url(),
+    API_KEY: z.string().min(32),
+    TOKEN: z.string().regex(/^[A-Z]+$/),
+  },
+});
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn update_description_preserves_url_validator() {
+        let tempdir = tempdir().unwrap();
+        write_custom_validators_project(tempdir.path());
+        let project = test_project(tempdir.path());
+        let mut args = mutate_args("DATABASE_URL");
+        args.description = Some("New desc".to_string());
+
+        run_add_or_update(&project, args, true).unwrap();
+
+        let schema = fs::read_to_string(tempdir.path().join("src/env.private.ts")).unwrap();
+        assert!(schema.contains("// New desc"));
+        assert!(schema.contains("DATABASE_URL: z.string().url(),"));
+    }
+
+    #[test]
+    fn update_description_preserves_min_validator() {
+        let tempdir = tempdir().unwrap();
+        write_custom_validators_project(tempdir.path());
+        let project = test_project(tempdir.path());
+        let mut args = mutate_args("API_KEY");
+        args.description = Some("Key docs".to_string());
+
+        run_add_or_update(&project, args, true).unwrap();
+
+        let schema = fs::read_to_string(tempdir.path().join("src/env.private.ts")).unwrap();
+        assert!(schema.contains("// Key docs"));
+        assert!(schema.contains("API_KEY: z.string().min(32),"));
+    }
+
+    #[test]
+    fn update_description_preserves_custom_regex_instead_of_numeric() {
+        let tempdir = tempdir().unwrap();
+        write_custom_validators_project(tempdir.path());
+        let project = test_project(tempdir.path());
+        let mut args = mutate_args("TOKEN");
+        args.description = Some("Token docs".to_string());
+
+        run_add_or_update(&project, args, true).unwrap();
+
+        let schema = fs::read_to_string(tempdir.path().join("src/env.private.ts")).unwrap();
+        assert!(schema.contains("// Token docs"));
+        assert!(schema.contains(r#"TOKEN: z.string().regex(/^[A-Z]+$/),"#));
+        assert!(!schema.contains(r"/^-?\d+(\.\d+)?$/"));
+    }
+
+    #[test]
+    fn update_optional_preserves_min_validator() {
+        let tempdir = tempdir().unwrap();
+        write_custom_validators_project(tempdir.path());
+        let project = test_project(tempdir.path());
+        let mut args = mutate_args("API_KEY");
+        args.optional = Some(true);
+
+        run_add_or_update(&project, args, true).unwrap();
+
+        let schema = fs::read_to_string(tempdir.path().join("src/env.private.ts")).unwrap();
+        assert!(schema.contains("API_KEY: z.string().min(32).optional(),"));
+    }
+
+    #[test]
+    fn update_default_preserves_url_validator() {
+        let tempdir = tempdir().unwrap();
+        write_custom_validators_project(tempdir.path());
+        let project = test_project(tempdir.path());
+        let mut args = mutate_args("DATABASE_URL");
+        args.default_value = Some("https://example.com".to_string());
+
+        run_add_or_update(&project, args, true).unwrap();
+
+        let schema = fs::read_to_string(tempdir.path().join("src/env.private.ts")).unwrap();
+        assert!(
+            schema.contains(r#"DATABASE_URL: z.string().url().default("https://example.com"),"#)
+        );
+    }
+
+    #[test]
+    fn update_optional_false_preserves_url_validator() {
+        let tempdir = tempdir().unwrap();
+        write_custom_validators_project(tempdir.path());
+        fs::write(
+            tempdir.path().join("src/env.private.ts"),
+            r#"import { createEnv } from "@t3-oss/env-core";
+import { z } from "zod";
+
+export const privateEnv = createEnv({
+  runtimeEnv: process.env,
+  server: {
+    DATABASE_URL: z.string().url().optional(),
+  },
+});
+"#,
+        )
+        .unwrap();
+        let project = test_project(tempdir.path());
+        let mut args = mutate_args("DATABASE_URL");
+        args.optional = Some(false);
+
+        run_add_or_update(&project, args, true).unwrap();
+
+        let schema = fs::read_to_string(tempdir.path().join("src/env.private.ts")).unwrap();
+        assert!(schema.contains("DATABASE_URL: z.string().url(),"));
+        assert!(!schema.contains(".optional()"));
+    }
+
+    #[test]
+    fn update_explicit_type_change_still_replaces_validators() {
+        let tempdir = tempdir().unwrap();
+        write_custom_validators_project(tempdir.path());
+        let project = test_project(tempdir.path());
+        let mut args = mutate_args("DATABASE_URL");
+        args.string = true;
+
+        run_add_or_update(&project, args, true).unwrap();
+
+        let schema = fs::read_to_string(tempdir.path().join("src/env.private.ts")).unwrap();
+        assert!(schema.contains("DATABASE_URL: z.string(),"));
+        assert!(!schema.contains(".url()"));
+    }
+
+    #[test]
+    fn update_unsupported_syntax_fails_before_any_writes() {
+        let tempdir = tempdir().unwrap();
+        write_custom_validators_project(tempdir.path());
+        fs::write(
+            tempdir.path().join("src/env.private.ts"),
+            r#"import { createEnv } from "@t3-oss/env-core";
+import { z } from "zod";
+
+const helper = z.string();
+export const privateEnv = createEnv({
+  runtimeEnv: process.env,
+  server: {
+    WEIRD: helper,
+  },
+});
+"#,
+        )
+        .unwrap();
+        fs::write(tempdir.path().join(".env.example"), "WEIRD=abc\n").unwrap();
+        let project = test_project(tempdir.path());
+        let before_schema = fs::read_to_string(tempdir.path().join("src/env.private.ts")).unwrap();
+        let before_example = fs::read_to_string(tempdir.path().join(".env.example")).unwrap();
+        let mut args = mutate_args("WEIRD");
+        args.optional = Some(true);
+
+        let err = run_add_or_update(&project, args, true).unwrap_err();
+
+        assert!(err.to_string().contains("unsupported"));
+        assert_eq!(
+            fs::read_to_string(tempdir.path().join("src/env.private.ts")).unwrap(),
+            before_schema
+        );
+        assert_eq!(
+            fs::read_to_string(tempdir.path().join(".env.example")).unwrap(),
+            before_example
+        );
+    }
+
+    #[test]
+    fn update_description_on_helper_schema_works() {
+        let tempdir = tempdir().unwrap();
+        write_custom_validators_project(tempdir.path());
+        fs::write(
+            tempdir.path().join("src/env.private.ts"),
+            r#"import { createEnv } from "@t3-oss/env-core";
+import { z } from "zod";
+
+const helper = z.string();
+export const privateEnv = createEnv({
+  runtimeEnv: process.env,
+  server: {
+    WEIRD: helper,
+  },
+});
+"#,
+        )
+        .unwrap();
+        fs::write(tempdir.path().join(".env.example"), "WEIRD=abc\n").unwrap();
+        let project = test_project(tempdir.path());
+        let mut args = mutate_args("WEIRD");
+        args.description = Some("Helper docs".to_string());
+
+        run_add_or_update(&project, args, true).unwrap();
+
+        let schema = fs::read_to_string(tempdir.path().join("src/env.private.ts")).unwrap();
+        assert!(schema.contains("// Helper docs"));
+        assert!(schema.contains("WEIRD: helper,"));
+    }
+
+    #[test]
+    fn update_regex_with_slashes_quotes_and_delimiters_preserved() {
+        let tempdir = tempdir().unwrap();
+        fs::create_dir_all(tempdir.path().join("src")).unwrap();
+        fs::write(
+            tempdir.path().join("package.json"),
+            r#"{"dependencies":{"zod":"latest"}}"#,
+        )
+        .unwrap();
+        fs::write(tempdir.path().join(".env.example"), "COMPLEX=abc\n").unwrap();
+        fs::write(
+            tempdir.path().join("src/env.private.ts"),
+            r#"import { createEnv } from "@t3-oss/env-core";
+import { z } from "zod";
+
+export const privateEnv = createEnv({
+  runtimeEnv: process.env,
+  server: {
+    COMPLEX: z.string().regex(/^a\/b(,c)?["']+$/, "needs / and \"quotes\""),
+  },
+});
+"#,
+        )
+        .unwrap();
+        let project = test_project(tempdir.path());
+        let mut args = mutate_args("COMPLEX");
+        args.description = Some("Complex docs".to_string());
+        run_add_or_update(&project, args, true).unwrap();
+        let schema = fs::read_to_string(tempdir.path().join("src/env.private.ts")).unwrap();
+        assert!(schema.contains("// Complex docs"));
+        assert!(schema.contains(
+            r#"COMPLEX: z.string().regex(/^a\/b(,c)?["']+$/, "needs / and \"quotes\""),"#
+        ));
+
+        let mut args = mutate_args("COMPLEX");
+        args.optional = Some(true);
+        run_add_or_update(&project, args, true).unwrap();
+        let schema = fs::read_to_string(tempdir.path().join("src/env.private.ts")).unwrap();
+        assert!(schema.contains(
+            r#"COMPLEX: z.string().regex(/^a\/b(,c)?["']+$/, "needs / and \"quotes\"").optional(),"#
+        ));
+    }
+
+    #[test]
+    fn update_embedded_comments_preserved() {
+        let tempdir = tempdir().unwrap();
+        fs::create_dir_all(tempdir.path().join("src")).unwrap();
+        fs::write(
+            tempdir.path().join("package.json"),
+            r#"{"dependencies":{"zod":"latest"}}"#,
+        )
+        .unwrap();
+        fs::write(tempdir.path().join(".env.example"), "TOKEN=ABC\n").unwrap();
+        fs::write(
+            tempdir.path().join("src/env.private.ts"),
+            r#"import { createEnv } from "@t3-oss/env-core";
+import { z } from "zod";
+
+export const privateEnv = createEnv({
+  runtimeEnv: process.env,
+  server: {
+    TOKEN: z.string() /* embedded: keep */ .regex(/^[A-Z]+$/),
+  },
+});
+"#,
+        )
+        .unwrap();
+        let project = test_project(tempdir.path());
+        let mut args = mutate_args("TOKEN");
+        args.description = Some("Token docs".to_string());
+        run_add_or_update(&project, args, true).unwrap();
+        let schema = fs::read_to_string(tempdir.path().join("src/env.private.ts")).unwrap();
+        assert!(schema.contains("// Token docs"));
+        assert!(schema.contains("/* embedded: keep */"));
+        assert!(schema.contains(r"TOKEN: z.string() /* embedded: keep */ .regex(/^[A-Z]+$/),"));
+
+        let mut args = mutate_args("TOKEN");
+        args.optional = Some(true);
+        run_add_or_update(&project, args, true).unwrap();
+        let schema = fs::read_to_string(tempdir.path().join("src/env.private.ts")).unwrap();
+        assert!(schema.contains("/* embedded: keep */"));
+        assert!(schema.contains(r".regex(/^[A-Z]+$/).optional(),"));
+    }
+
+    #[test]
+    fn update_invalid_default_leaves_schema_and_template_unchanged() {
+        let tempdir = tempdir().unwrap();
+        fs::create_dir_all(tempdir.path().join("src")).unwrap();
+        fs::write(
+            tempdir.path().join("package.json"),
+            r#"{"dependencies":{"zod":"latest"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            tempdir.path().join(".env.example"),
+            "PORT=3000\nFLAG=true\nPRE=123\n",
+        )
+        .unwrap();
+        fs::write(
+            tempdir.path().join("src/env.private.ts"),
+            r#"import { createEnv } from "@t3-oss/env-core";
+import { z } from "zod";
+
+export const privateEnv = createEnv({
+  runtimeEnv: process.env,
+  server: {
+    PORT: z.coerce.number(),
+    FLAG: z.coerce.boolean(),
+    PRE: z.preprocess(Number, z.number()),
+  },
+});
+"#,
+        )
+        .unwrap();
+        let project = test_project(tempdir.path());
+        let before_schema = fs::read_to_string(tempdir.path().join("src/env.private.ts")).unwrap();
+        let before_example = fs::read_to_string(tempdir.path().join(".env.example")).unwrap();
+
+        for (var, bad) in [
+            ("PORT", "not-a-number"),
+            ("PORT", "process.exit()"),
+            ("FLAG", "maybe"),
+            ("PRE", "123"),
+        ] {
+            let mut args = mutate_args(var);
+            args.default_value = Some(bad.to_string());
+            let err = run_add_or_update(&project, args, true).unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("invalid") || msg.contains("unsupported"),
+                "unexpected error for {var}={bad}: {msg}"
+            );
+            assert!(
+                msg.contains("manually"),
+                "error should tell manual edit for {var}: {msg}"
+            );
+            assert_eq!(
+                fs::read_to_string(tempdir.path().join("src/env.private.ts")).unwrap(),
+                before_schema,
+                "schema changed for invalid {var}={bad}"
+            );
+            assert_eq!(
+                fs::read_to_string(tempdir.path().join(".env.example")).unwrap(),
+                before_example,
+                "template changed for invalid {var}={bad}"
+            );
+        }
+
+        // Valid number/boolean defaults still work.
+        let mut args = mutate_args("PORT");
+        args.default_value = Some("3000".to_string());
+        run_add_or_update(&project, args, true).unwrap();
+        let schema = fs::read_to_string(tempdir.path().join("src/env.private.ts")).unwrap();
+        assert!(schema.contains("PORT: z.coerce.number().default(3000),"));
+
+        let mut args = mutate_args("FLAG");
+        args.default_value = Some("true".to_string());
+        run_add_or_update(&project, args, true).unwrap();
+        let schema = fs::read_to_string(tempdir.path().join("src/env.private.ts")).unwrap();
+        assert!(schema.contains("FLAG: z.coerce.boolean().default(true),"));
     }
 
     #[test]

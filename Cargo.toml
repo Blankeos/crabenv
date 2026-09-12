@@ -35,8 +35,12 @@ walkdir = "2.5"
 # Pinned early so the TypeScript adapter can move from targeted extraction to
 # AST-level edits without changing the public CLI shape.
 oxc_allocator = "0.135.0"
+oxc_ast = "0.135.0"
 oxc_parser = "0.135.0"
 oxc_span = "0.135.0"
+# AST spans for the Rust adapter (byte-accurate edits via proc-macro2 locations).
+proc-macro2 = { version = "1.0", features = ["span-locations"] }
+syn = { version = "2.0", features = ["full", "parsing"] }
 
 [dev-dependencies]
 assert_cmd = "2.0"

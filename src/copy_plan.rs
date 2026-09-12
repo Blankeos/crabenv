@@ -84,7 +84,7 @@ fn render_copy_entry(
     let should_comment = entry.commented && (overwrite || existing_value.is_none());
     let rendered = render_assignment(&entry.key, &value, should_comment, entry.quote);
     if should_comment {
-        format!("# {rendered}")
+        comment_assignment(&rendered)
     } else {
         rendered
     }
@@ -99,10 +99,28 @@ fn render_entry_line(
     let commented = preserve_commented && entry.commented;
     let assignment = render_assignment(&entry.key, value, commented, quote);
     if commented {
-        format!("# {assignment}")
+        comment_assignment(&assignment)
     } else {
         assignment
     }
+}
+
+/// Prefix *every* physical line with `# ` so real dotenv loaders keep
+/// commented multiline continuations inactive. Only the first line carries
+/// `KEY=`; continuations are value lines and must still be commented or an
+/// assignment-like continuation (`FOO=bar`) would parse as active.
+fn comment_assignment(assignment: &str) -> String {
+    assignment
+        .split('\n')
+        .map(|line| {
+            if line.is_empty() {
+                "#".to_string()
+            } else {
+                format!("# {line}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn render_assignment(key: &str, value: &str, commented: bool, quote: Option<char>) -> String {
@@ -811,6 +829,196 @@ mod tests {
             env_contents,
             "API_KEY=api\n\n# DATABASE_URL=\"file:./local.db\"\nDATABASE_URL=\"file:./local.db\"\n"
         );
+    }
+
+    fn multiline_pem_example() -> String {
+        "PRIVATE_KEY=\"-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\nFOO=bar\n# ---- shared ----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC8\n-----END PRIVATE KEY-----\"\nOTHER=hello\n"
+            .to_string()
+    }
+
+    #[test]
+    fn copy_overwrite_keeps_full_multiline_quoted_value() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let before_example = multiline_pem_example();
+        fs::write(tempdir.path().join(".env.example"), &before_example).unwrap();
+        // Existing local has stale values; overwrite must take the example's
+        // full quoted PEM, not a truncated first line.
+        fs::write(
+            tempdir.path().join(".env"),
+            "PRIVATE_KEY=stale\nOTHER=old\n",
+        )
+        .unwrap();
+
+        let project = Project {
+            root: tempdir.path().to_path_buf(),
+            is_monorepo: false,
+            workspaces: vec![test_workspace(tempdir.path(), ".")],
+        };
+
+        let plan = build_copy_plan(&project, false, true).unwrap();
+        let env_contents = write_contents(&plan, ".env");
+
+        assert!(
+            env_contents.contains("FOO=bar\n# ---- shared ----"),
+            "overwrite must keep full value, got:\n{env_contents}"
+        );
+        assert!(env_contents.contains("-----BEGIN PRIVATE KEY-----"));
+        assert!(env_contents.contains("-----END PRIVATE KEY-----\""));
+        assert!(!env_contents.contains("PRIVATE_KEY=stale"));
+        // No phantom FOO entry was created.
+        let parsed = dotenv::parse_file(&tempdir.path().join(".env.example")).unwrap();
+        assert_eq!(parsed.len(), 2);
+        // The rendered .env still parses as two entries with the full value.
+        fs::write(tempdir.path().join(".env"), env_contents).unwrap();
+        let rendered = dotenv::parse_file(&tempdir.path().join(".env")).unwrap();
+        assert_eq!(rendered.len(), 2);
+        assert!(rendered[0].value.contains("FOO=bar") || rendered[1].value.contains("FOO=bar"));
+    }
+
+    #[test]
+    fn copy_additive_keeps_full_multiline_with_existing_local() {
+        let tempdir = tempfile::tempdir().unwrap();
+        fs::write(tempdir.path().join(".env.example"), multiline_pem_example()).unwrap();
+        // Existing local already has OTHER; additive must append the whole PEM
+        // block without splitting inside it.
+        let before_local = "OTHER=local\n";
+        fs::write(tempdir.path().join(".env"), before_local).unwrap();
+
+        let project = Project {
+            root: tempdir.path().to_path_buf(),
+            is_monorepo: false,
+            workspaces: vec![test_workspace(tempdir.path(), ".")],
+        };
+
+        let plan = build_copy_plan(&project, false, false).unwrap();
+        let env_contents = write_contents(&plan, ".env");
+
+        assert!(
+            env_contents.contains("OTHER=local"),
+            "additive must keep existing, got:\n{env_contents}"
+        );
+        assert!(
+            env_contents.contains("FOO=bar\n# ---- shared ----"),
+            "additive must append full value, got:\n{env_contents}"
+        );
+        // Before had no PEM; after must have exactly one PRIVATE_KEY block.
+        assert!(before_local.contains("OTHER=local"));
+        assert!(!before_local.contains("PRIVATE_KEY"));
+        assert!(env_contents.contains("PRIVATE_KEY=\"-----BEGIN PRIVATE KEY-----"));
+
+        // Additive is idempotent: planning again from the new .env adds nothing.
+        fs::write(tempdir.path().join(".env"), env_contents).unwrap();
+        let again = build_copy_plan(&project, false, false).unwrap();
+        let again_contents = write_contents(&again, ".env");
+        assert_eq!(again_contents, env_contents);
+
+        // Existing multiline local is also preserved verbatim on additive.
+        fs::write(
+            tempdir.path().join(".env"),
+            "PRIVATE_KEY=\"-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\nFOO=bar\n# ---- shared ----\n-----END PRIVATE KEY-----\"\nOTHER=local\n",
+        )
+        .unwrap();
+        let plan = build_copy_plan(&project, false, false).unwrap();
+        let env_contents = write_contents(&plan, ".env");
+        assert!(env_contents.contains("FOO=bar\n# ---- shared ----"));
+    }
+
+    #[test]
+    fn copy_keeps_commented_optional_multiline_safely() {
+        let tempdir = tempfile::tempdir().unwrap();
+        fs::write(
+            tempdir.path().join(".env.example"),
+            "OTHER=hello\n# OPTIONAL_KEY=\"line1\n# line2\n# line3\"\n",
+        )
+        .unwrap();
+
+        let project = Project {
+            root: tempdir.path().to_path_buf(),
+            is_monorepo: false,
+            workspaces: vec![test_workspace(tempdir.path(), ".")],
+        };
+
+        for overwrite in [true, false] {
+            let plan = build_copy_plan(&project, false, overwrite).unwrap();
+            let env_contents = write_contents(&plan, ".env");
+            assert!(
+                env_contents.contains("# OPTIONAL_KEY=\"line1\n# line2\n# line3\""),
+                "overwrite={overwrite} must keep commented multiline, got:\n{env_contents}"
+            );
+            assert!(!env_contents.contains("\nOPTIONAL_KEY=\"line1"));
+            // Every continuation stays commented so real loaders stay inactive.
+            for line in env_contents.lines() {
+                if line.contains("line2") || line.contains("line3") {
+                    assert!(
+                        line.trim_start().starts_with('#'),
+                        "continuation must stay commented, got: {line:?} in:\n{env_contents}"
+                    );
+                }
+            }
+        }
+
+        // Once a local value exists, additive uncomments but keeps newlines.
+        fs::write(
+            tempdir.path().join(".env"),
+            "OPTIONAL_KEY=\"line1\nline2\nline3\"\n",
+        )
+        .unwrap();
+        let plan = build_copy_plan(&project, false, false).unwrap();
+        let env_contents = write_contents(&plan, ".env");
+        assert!(env_contents.contains("OPTIONAL_KEY=\"line1\nline2\nline3\""));
+    }
+
+    #[test]
+    fn copy_comments_every_line_of_optional_multiline_assignment_like_value() {
+        let tempdir = tempfile::tempdir().unwrap();
+        fs::write(
+            tempdir.path().join(".env.example"),
+            "# OPTIONAL_KEY=\"line1\n# FOO=bar\n# line3\"\nOTHER=hello\n",
+        )
+        .unwrap();
+
+        let project = Project {
+            root: tempdir.path().to_path_buf(),
+            is_monorepo: false,
+            workspaces: vec![test_workspace(tempdir.path(), ".")],
+        };
+
+        for overwrite in [true, false] {
+            let plan = build_copy_plan(&project, false, overwrite).unwrap();
+            let env_contents = write_contents(&plan, ".env");
+            assert!(
+                env_contents.contains("# FOO=bar"),
+                "overwrite={overwrite} must keep assignment-like continuation commented, got:\n{env_contents}"
+            );
+            assert!(
+                !env_contents.lines().any(|line| line == "FOO=bar"),
+                "overwrite={overwrite} must never emit bare active continuation, got:\n{env_contents}"
+            );
+        }
+    }
+
+    #[test]
+    fn copy_errors_on_malformed_active_unterminated_quote() {
+        let tempdir = tempfile::tempdir().unwrap();
+        fs::write(
+            tempdir.path().join(".env.example"),
+            "FOO=\"oops\nBAR=value\n",
+        )
+        .unwrap();
+
+        let project = Project {
+            root: tempdir.path().to_path_buf(),
+            is_monorepo: false,
+            workspaces: vec![test_workspace(tempdir.path(), ".")],
+        };
+
+        assert!(build_copy_plan(&project, false, true).is_err());
+        assert!(build_copy_plan(&project, false, false).is_err());
+
+        // Malformed local .env also errors instead of dropping trailing vars.
+        fs::write(tempdir.path().join(".env.example"), "OTHER=hello\n").unwrap();
+        fs::write(tempdir.path().join(".env"), "FOO=\"oops\nBAR=value\n").unwrap();
+        assert!(build_copy_plan(&project, false, false).is_err());
     }
 
     fn write_contents<'a>(plan: &'a CopyPlan, name: &str) -> &'a str {
