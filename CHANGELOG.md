@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.6] - 2026-09-13
+
+### Bug Fixes
+
+- Preserve user-owned code and values during metadata edits and copy by @Blankeos
+
+### Chores
+
+- Refuse tagging unless on main by @Blankeos
+
+### Features
+
+- Add interactive variable actions via `crabenv ls` by @Blankeos
+- Add conservative no-op safety checks and CI diagnostics docs by @Blankeos
+
 ## [0.0.5] - 2026-07-05
 
 ### Bug Fixes
