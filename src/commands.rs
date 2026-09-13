@@ -350,43 +350,133 @@ impl Config {
 "#;
 
 pub fn run_list(project: &Project, args: ListArgs) -> Result<()> {
-    let graph = build_graph(project)?;
-    let expand = args.expand || !args.compact;
     if args.json && !args.print {
         anyhow::bail!("crabenv ls --json is only valid with -p/--print");
     }
+    let expand = args.expand || !args.compact;
     if args.print || !should_use_cliclack() {
+        let graph = build_graph(project)?;
         if args.json {
             render_list_json(project, &graph, expand)?;
         } else {
             render_list(project, &graph, expand);
         }
     } else {
-        run_interactive_list(project, &graph, expand)?;
+        run_interactive_list(project, expand)?;
     }
     Ok(())
 }
 
-fn run_interactive_list(project: &Project, graph: &EnvGraph, expand: bool) -> Result<()> {
-    let rows = list_rows(project, graph, expand);
-    intro(format!("{} variable(s)", rows.len()))?;
+fn run_interactive_list(project: &Project, expand: bool) -> Result<()> {
+    intro("crabenv ls")?;
 
-    if rows.is_empty() {
-        outro("No schema/template env vars found.")?;
-        return Ok(());
+    loop {
+        let graph = build_graph(project)?;
+        let rows = list_rows(project, &graph, expand);
+        if rows.is_empty() {
+            outro("No schema/template env vars found.")?;
+            return Ok(());
+        }
+
+        let Some(variable) = prompt_list_selection(&rows)? else {
+            outro("Done")?;
+            return Ok(());
+        };
+
+        let Some(action) = prompt_ls_action(&variable)? else {
+            continue;
+        };
+        if action == LsAction::Back {
+            continue;
+        }
+        if let Err(err) = run_ls_action(project, &variable, action) {
+            if !is_interactive_cancel(&err) {
+                eprintln!("{} {}", color("Error:", "31"), err);
+            }
+        }
     }
+}
 
+fn prompt_list_selection(rows: &[ListRow]) -> Result<Option<String>> {
     set_theme(ListTheme);
-    let selected = select("Search").filter_mode().max_rows(20);
-    let mut prompt = selected;
+    let mut prompt = select(format!("Search ({} variable(s))", rows.len()))
+        .filter_mode()
+        .max_rows(20);
     for row in rows {
-        prompt = prompt.item(row.index.clone(), list_search_label(&row), list_hint(&row));
+        prompt = prompt.item(row.name.clone(), list_search_label(row), list_hint(row));
     }
     let result = prompt.interact();
     reset_theme();
-    let _ = result?;
-    outro("Done")?;
-    Ok(())
+    match result {
+        Ok(variable) => Ok(Some(variable)),
+        Err(err) if err.kind() == std::io::ErrorKind::Interrupted => Ok(None),
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn prompt_ls_action(variable: &str) -> Result<Option<LsAction>> {
+    let choice = select(format!("{variable} — choose action"))
+        .item(
+            LsAction::Update,
+            "Update",
+            "edit selected fields via the update wizard",
+        )
+        .item(
+            LsAction::Remove,
+            "Remove",
+            "delete with confirmation via the remove wizard",
+        )
+        .item(
+            LsAction::Attach,
+            "Attach",
+            "share the existing contract to another owner",
+        )
+        .item(
+            LsAction::Back,
+            "Back to list",
+            "return without changing anything",
+        )
+        .interact();
+    match choice {
+        Ok(action) => Ok(Some(action)),
+        Err(err) if err.kind() == std::io::ErrorKind::Interrupted => Ok(None),
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn run_ls_action(project: &Project, variable: &str, action: LsAction) -> Result<()> {
+    match action {
+        LsAction::Back => Ok(()),
+        LsAction::Update => {
+            let args = crate::prompt::prompt_add_or_update(project, true, Some(variable))?;
+            run_add_or_update(project, args, true)
+        }
+        LsAction::Remove => {
+            let args = crate::prompt::prompt_remove(project, Some(variable))?;
+            run_remove(project, args)
+        }
+        LsAction::Attach => {
+            let args = crate::prompt::prompt_attach(project, Some(variable))?;
+            run_attach(project, args)
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LsAction {
+    Update,
+    Remove,
+    Attach,
+    Back,
+}
+
+fn is_interactive_cancel(err: &anyhow::Error) -> bool {
+    if let Some(io) = err.downcast_ref::<std::io::Error>() {
+        if io.kind() == std::io::ErrorKind::Interrupted {
+            return true;
+        }
+    }
+    err.to_string() == "cancelled"
 }
 
 fn list_label(row: &ListRow) -> String {
@@ -485,7 +575,7 @@ impl Theme for ListTheme {
                 "{}  {}\n",
                 self.bar_color(state).apply_to("└"),
                 self.placeholder_style(state)
-                    .apply_to("type to search · Enter closes")
+                    .apply_to("type to search · Enter for actions · Esc to quit")
             ),
             _ => Theme::format_footer_with_message(self, state, ""),
         }
@@ -922,7 +1012,7 @@ pub fn run_add_or_update(project: &Project, args: MutateArgs, update: bool) -> R
     // If no variable was provided, launch the interactive wizard.
     let from_cli = args.variable.is_some();
     let args = if args.variable.is_none() {
-        crate::prompt::prompt_add_or_update(project, update)?
+        crate::prompt::prompt_add_or_update(project, update, None)?
     } else {
         args
     };
@@ -1189,7 +1279,7 @@ fn update_mutation_from_record(record: &EnvRecord, args: &MutateArgs) -> VarMuta
 pub fn run_attach(project: &Project, args: AttachArgs) -> Result<()> {
     // If no variable was provided, launch the interactive wizard.
     let args = if args.variable.is_none() {
-        crate::prompt::prompt_attach(project)?
+        crate::prompt::prompt_attach(project, None)?
     } else {
         args
     };
@@ -1252,7 +1342,7 @@ pub fn run_attach(project: &Project, args: AttachArgs) -> Result<()> {
 pub fn run_remove(project: &Project, args: RemoveArgs) -> Result<()> {
     // If no variable was provided, launch the interactive wizard.
     let args = if args.variable.is_none() {
-        crate::prompt::prompt_remove(project)?
+        crate::prompt::prompt_remove(project, None)?
     } else {
         args
     };
@@ -2704,5 +2794,19 @@ export const privateEnv = createEnv({
                 SharedTarget::All
             ));
         }
+    }
+
+    #[test]
+    fn ls_cancel_detection_is_exact_for_wizard_decline() {
+        let interrupted: anyhow::Error =
+            std::io::Error::from(std::io::ErrorKind::Interrupted).into();
+        assert!(is_interactive_cancel(&interrupted));
+        assert!(is_interactive_cancel(&anyhow!("cancelled")));
+        assert!(!is_interactive_cancel(&anyhow!("Operation canceled.")));
+        assert!(!is_interactive_cancel(&anyhow!("not found")));
+        assert!(!is_interactive_cancel(&anyhow!("no update flags provided")));
+        assert!(!is_interactive_cancel(&anyhow!(
+            "failed to update cancelled_var: not found"
+        )));
     }
 }

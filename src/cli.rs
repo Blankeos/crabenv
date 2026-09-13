@@ -37,7 +37,7 @@ pub enum Commands {
     #[command(
         visible_alias = "ls",
         about = "List env vars grouped by variable name",
-        long_about = "List env vars from definition surfaces (schema and template). In an interactive terminal this opens a searchable list with focused details for the highlighted variable. Use -p/--print for the plain table, especially in scripts and AI agents. Managed sink coverage is shown as the sinks surface. Local-only values are hidden here and reported by doctor instead. Shared owner labels and enum values are expanded by default; use --compact for the shorter form."
+        long_about = "List env vars from definition surfaces (schema and template). In an interactive terminal this opens a searchable list with focused details for the highlighted variable. Press Enter on a variable to update, remove, or attach it; Esc quits or goes back. Use -p/--print for the plain table, especially in scripts and AI agents. Managed sink coverage is shown as the sinks surface. Local-only values are hidden here and reported by doctor instead. Shared owner labels and enum values are expanded by default; use --compact for the shorter form."
     )]
     List(ListArgs),
     #[command(

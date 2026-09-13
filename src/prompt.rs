@@ -22,7 +22,12 @@ use crate::util::{display_rel, is_valid_var_name};
 
 /// Interactive wizard for `crabenv add` and `crabenv update`.
 /// Returns a fully-populated `MutateArgs`.
-pub fn prompt_add_or_update(project: &Project, update: bool) -> Result<MutateArgs> {
+/// When `preselected` is `Some`, name selection is skipped (used by `ls`).
+pub fn prompt_add_or_update(
+    project: &Project,
+    update: bool,
+    preselected: Option<&str>,
+) -> Result<MutateArgs> {
     intro(if update {
         "Update an env var"
     } else {
@@ -41,10 +46,10 @@ pub fn prompt_add_or_update(project: &Project, update: bool) -> Result<MutateArg
     }
 
     // --- Variable name ---
-    let variable = if update {
-        prompt_existing_var(graph.as_ref().expect("update graph is present"))?
-    } else {
-        prompt_var_name()?
+    let variable = match preselected {
+        Some(variable) => variable.to_string(),
+        None if update => prompt_existing_var(graph.as_ref().expect("update graph is present"))?,
+        None => prompt_var_name()?,
     };
 
     // --- Owner selection ---
@@ -168,7 +173,8 @@ pub fn prompt_add_or_update(project: &Project, update: bool) -> Result<MutateArg
 
 /// Interactive wizard for `crabenv attach`.
 /// Returns a fully-populated `AttachArgs`.
-pub fn prompt_attach(project: &Project) -> Result<AttachArgs> {
+/// When `preselected` is `Some`, name selection is skipped (used by `ls`).
+pub fn prompt_attach(project: &Project, preselected: Option<&str>) -> Result<AttachArgs> {
     intro("Attach an env var")?;
 
     let apps = collect_apps(project);
@@ -180,7 +186,10 @@ pub fn prompt_attach(project: &Project) -> Result<AttachArgs> {
     let graph = build_graph(project)?;
 
     // --- Variable name (must already exist in some schema) ---
-    let variable = prompt_existing_var(&graph)?;
+    let variable = match preselected {
+        Some(variable) => variable.to_string(),
+        None => prompt_existing_var(&graph)?,
+    };
 
     // --- Source owner (--from) ---
     let candidates = find_var_in_schemas(&graph, &variable);
@@ -247,13 +256,17 @@ pub fn prompt_attach(project: &Project) -> Result<AttachArgs> {
 
 /// Interactive wizard for `crabenv remove`.
 /// Returns a fully-populated `RemoveArgs`.
-pub fn prompt_remove(project: &Project) -> Result<RemoveArgs> {
+/// When `preselected` is `Some`, name selection is skipped (used by `ls`).
+pub fn prompt_remove(project: &Project, preselected: Option<&str>) -> Result<RemoveArgs> {
     intro("Remove an env var")?;
 
     let graph = build_graph(project)?;
 
     // --- Variable name (must exist somewhere) ---
-    let variable = prompt_existing_var(&graph)?;
+    let variable = match preselected {
+        Some(variable) => variable.to_string(),
+        None => prompt_existing_var(&graph)?,
+    };
 
     let candidates = graph
         .values()

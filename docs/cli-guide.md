@@ -30,6 +30,7 @@ CRUD commands:
 ```sh
 crabenv list -p # notice -p since without it, it's interactive (difficult to use for agents).
 crabenv list -p --json
+crabenv ls      # interactive: search, press Enter on a variable, then choose Update / Remove / Attach / Back to list; Esc goes back or quits. Removal keeps its confirmation prompt.
 crabenv add VARIABLE_NAME --example "value" --optional
 crabenv update VARIABLE_NAME
 crabenv remove VARIABLE_NAME
