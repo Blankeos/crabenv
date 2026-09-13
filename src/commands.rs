@@ -7,13 +7,14 @@ use std::path::{Path, PathBuf};
 use cliclack::{
     confirm, intro, outro, outro_cancel, reset_theme, select, set_theme, Theme, ThemeState,
 };
+use serde::Serialize;
 
 use crate::adapters::{dotenv, python, rust, typescript};
 use crate::cli::{AttachArgs, CopyArgs, DoctorArgs, FormatArgs, ListArgs, MutateArgs, RemoveArgs};
 use crate::copy_plan::{build_copy_plan, build_root_example_plan};
 use crate::discovery::app_workspaces;
-use crate::graph::{build_graph, EnvGraph};
-use crate::issues::collect_issues;
+use crate::graph::{build_graph, build_graph_filtered, EnvGraph};
+use crate::issues::collect_issues_filtered;
 use crate::models::{
     EnvRecord, EnvSurface, FileWritePlan, Fix, Issue, Project, Scope, Severity, VarMutation,
     Workspace,
@@ -22,14 +23,22 @@ use crate::render::{list_rows, render_doctor_inventory, render_list, render_list
 use crate::sinks::apply_sink_plan;
 use crate::util::{color, display_rel, normalize_rel_display, validate_var_name};
 
-fn add_format_issue(issues: &mut Vec<Issue>, format_write_count: usize) {
-    if format_write_count == 0 {
+fn add_format_issue(issues: &mut Vec<Issue>, writes: &[FileWritePlan]) {
+    if writes.is_empty() {
         return;
     }
 
     issues.push(Issue {
+        code: "needs-formatting".to_string(),
         severity: Severity::Warn,
-        message: format!("{format_write_count} file(s) need formatting; run crabenv format"),
+        message: format!(
+            "{} file(s) need formatting; run crabenv format",
+            writes.len()
+        ),
+        owner: None,
+        paths: writes.iter().map(|write| write.path.clone()).collect(),
+        remediation: "run crabenv format to sort and group env files and schema entries"
+            .to_string(),
         fix: Some(Fix::Format),
     });
 }
@@ -484,10 +493,35 @@ impl Theme for ListTheme {
 }
 
 pub fn run_doctor(project: &Project, args: DoctorArgs) -> Result<()> {
-    let format_writes = build_format_plan(project)?;
-    let graph = build_graph(project)?;
-    let mut issues = collect_issues(project, &graph)?;
-    add_format_issue(&mut issues, format_writes.len());
+    // Keep `--json` output pure: no human table, no fix preview, no inventory.
+    if args.json && (args.fix || args.yes) {
+        bail!(
+            "--json cannot be combined with --fix or --yes; JSON output must stay pure machine-readable"
+        );
+    }
+
+    let include_local = !args.repo_only;
+    let collect = |project: &Project| -> Result<(EnvGraph, Vec<Issue>)> {
+        let format_writes = build_format_plan_filtered(project, include_local)?;
+        let graph = build_graph_filtered(project, include_local)?;
+        let mut issues = collect_issues_filtered(project, &graph, args.repo_only)?;
+        add_format_issue(&mut issues, &format_writes);
+        Ok((graph, issues))
+    };
+
+    let (graph, mut issues) = collect(project)?;
+
+    if args.json {
+        print_doctor_json(project, &issues, args.repo_only, args.check)?;
+        if args.check && doctor_error_count(&issues) > 0 {
+            bail!(
+                "crabenv doctor --check failed: {} error(s) found",
+                doctor_error_count(&issues)
+            );
+        }
+        return Ok(());
+    }
+
     let actionable_issue_count = actionable_doctor_issue_count(&issues);
     if actionable_issue_count == 0 {
         println!("crabenv doctor: {}", color("no issues found", "32"));
@@ -518,6 +552,12 @@ pub fn run_doctor(project: &Project, args: DoctorArgs) -> Result<()> {
         }
         if fixes.is_empty() {
             println!("no automatic fixes available");
+            if args.check && doctor_error_count(&issues) > 0 {
+                bail!(
+                    "crabenv doctor --check failed: {} error(s) found",
+                    doctor_error_count(&issues)
+                );
+            }
             return Ok(());
         }
 
@@ -525,13 +565,140 @@ pub fn run_doctor(project: &Project, args: DoctorArgs) -> Result<()> {
         render_fix_plan(&fixes, args.yes);
 
         if !args.yes {
+            if args.check && doctor_error_count(&issues) > 0 {
+                bail!(
+                    "crabenv doctor --check failed: {} error(s) found",
+                    doctor_error_count(&issues)
+                );
+            }
             return Ok(());
         }
 
-        apply_fixes(project, &fixes)?;
+        apply_fixes(project, &fixes, args.repo_only)?;
         println!("{} applied {} fix(es)", color("✓", "32"), fixes.len());
+
+        if args.check {
+            // Re-evaluate after applying fixes so `--fix --yes --check` gates
+            // on what remains, not on what was already fixed.
+            let (_graph, remaining) = collect(project)?;
+            issues = remaining;
+            if issues.is_empty() {
+                println!("re-check: no issues remaining");
+            } else {
+                println!("re-check: {} issue(s) remaining", issues.len());
+                for issue in &issues {
+                    println!("{} {}", severity_label(&issue.severity), issue.message);
+                }
+            }
+            if doctor_error_count(&issues) > 0 {
+                bail!(
+                    "crabenv doctor --check failed: {} error(s) remaining",
+                    doctor_error_count(&issues)
+                );
+            }
+        }
+        return Ok(());
     }
 
+    if args.check && doctor_error_count(&issues) > 0 {
+        bail!(
+            "crabenv doctor --check failed: {} error(s) found",
+            doctor_error_count(&issues)
+        );
+    }
+
+    Ok(())
+}
+
+fn doctor_error_count(issues: &[Issue]) -> usize {
+    issues
+        .iter()
+        .filter(|issue| matches!(issue.severity, Severity::Error))
+        .count()
+}
+
+fn doctor_counts(issues: &[Issue]) -> (usize, usize, usize) {
+    let mut errors = 0;
+    let mut warns = 0;
+    let mut infos = 0;
+    for issue in issues {
+        match issue.severity {
+            Severity::Error => errors += 1,
+            Severity::Warn => warns += 1,
+            Severity::Info => infos += 1,
+        }
+    }
+    (errors, warns, infos)
+}
+
+#[derive(Serialize)]
+struct DoctorJsonIssue {
+    code: String,
+    severity: String,
+    message: String,
+    owner: Option<String>,
+    paths: Vec<String>,
+    remediation: String,
+    fixable: bool,
+}
+
+#[derive(Serialize)]
+struct DoctorJsonSummary {
+    error: usize,
+    warn: usize,
+    info: usize,
+    total: usize,
+}
+
+#[derive(Serialize)]
+struct DoctorJsonReport {
+    version: u32,
+    check: bool,
+    repo_only: bool,
+    issues: Vec<DoctorJsonIssue>,
+    summary: DoctorJsonSummary,
+}
+
+fn print_doctor_json(
+    project: &Project,
+    issues: &[Issue],
+    repo_only: bool,
+    check: bool,
+) -> Result<()> {
+    let (errors, warns, infos) = doctor_counts(issues);
+    let report = DoctorJsonReport {
+        version: 1,
+        check,
+        repo_only,
+        issues: issues
+            .iter()
+            .map(|issue| DoctorJsonIssue {
+                code: issue.code.clone(),
+                severity: issue.severity.as_str().to_string(),
+                message: issue.message.clone(),
+                owner: issue.owner.as_ref().map(|owner| display_rel(owner)),
+                paths: issue
+                    .paths
+                    .iter()
+                    .map(|path| {
+                        display_path_from_root(project, path)
+                            .to_string_lossy()
+                            .replace('\\', "/")
+                    })
+                    .collect(),
+                remediation: issue.remediation.clone(),
+                fixable: issue.fix.is_some(),
+            })
+            .collect(),
+        summary: DoctorJsonSummary {
+            error: errors,
+            warn: warns,
+            info: infos,
+            total: issues.len(),
+        },
+    };
+    // Pure stdout: exactly one JSON line, no colors, no extra text.
+    println!("{}", serde_json::to_string(&report)?);
     Ok(())
 }
 
@@ -557,7 +724,10 @@ pub fn run_format(project: &Project, args: FormatArgs) -> Result<()> {
                 display_rel(&display_path_from_root(project, &write.path))
             );
         }
-        return Ok(());
+        bail!(
+            "crabenv format --check failed: {} file(s) need formatting",
+            writes.len()
+        );
     }
 
     apply_format_writes(project, &writes)?;
@@ -640,11 +810,20 @@ fn fix_accent_color(fix: &Fix) -> &'static str {
 }
 
 fn build_format_plan(project: &Project) -> Result<Vec<FileWritePlan>> {
+    build_format_plan_filtered(project, true)
+}
+
+fn build_format_plan_filtered(
+    project: &Project,
+    include_local: bool,
+) -> Result<Vec<FileWritePlan>> {
     let mut paths = BTreeSet::<PathBuf>::new();
 
-    let root_env = project.root.join(".env");
-    if root_env.exists() {
-        paths.insert(root_env);
+    if include_local {
+        let root_env = project.root.join(".env");
+        if root_env.exists() {
+            paths.insert(root_env);
+        }
     }
     let root_example = project.root.join(".env.example");
     if root_example.exists() {
@@ -656,7 +835,7 @@ fn build_format_plan(project: &Project) -> Result<Vec<FileWritePlan>> {
         if example.exists() {
             paths.insert(example);
         }
-        if !project.is_monorepo {
+        if include_local && !project.is_monorepo {
             let local = dotenv::local_path(project, app);
             if local.exists() {
                 paths.insert(local);
@@ -1175,8 +1354,8 @@ fn describe_fix(fix: &Fix) -> String {
     }
 }
 
-fn apply_fixes(project: &Project, fixes: &[Fix]) -> Result<()> {
-    let graph = build_graph(project)?;
+fn apply_fixes(project: &Project, fixes: &[Fix], repo_only: bool) -> Result<()> {
+    let graph = build_graph_filtered(project, !repo_only)?;
     let mut should_copy = false;
     let mut should_format = false;
     let mut should_sync_root_example = false;
@@ -1225,6 +1404,12 @@ fn apply_fixes(project: &Project, fixes: &[Fix]) -> Result<()> {
         }
     }
 
+    if should_copy && repo_only {
+        // Local issues are filtered in repo-only mode, so this should not
+        // happen. Skip instead of reading/writing secrets.
+        should_copy = false;
+    }
+
     if should_copy {
         run_copy(
             project,
@@ -1238,7 +1423,13 @@ fn apply_fixes(project: &Project, fixes: &[Fix]) -> Result<()> {
         sync_root_example(project)?;
     }
     if should_format {
-        run_format(project, FormatArgs { check: false })?;
+        if repo_only {
+            let writes = build_format_plan_filtered(project, false)?;
+            apply_format_writes(project, &writes)?;
+            println!("crabenv format: formatted {} file(s)", writes.len());
+        } else {
+            run_format(project, FormatArgs { check: false })?;
+        }
     }
     Ok(())
 }
@@ -1652,25 +1843,47 @@ export const privateEnv = createEnv({
     fn doctor_adds_fixable_format_issue_when_files_would_change() {
         let mut issues = Vec::new();
 
-        add_format_issue(&mut issues, 2);
+        let writes = vec![
+            FileWritePlan {
+                path: PathBuf::from(".env.example"),
+                contents: String::new(),
+            },
+            FileWritePlan {
+                path: PathBuf::from("src/env.private.ts"),
+                contents: String::new(),
+            },
+        ];
+        add_format_issue(&mut issues, &writes);
 
         assert_eq!(issues.len(), 1);
         assert!(matches!(issues[0].severity, Severity::Warn));
+        assert_eq!(issues[0].code, "needs-formatting");
         assert_eq!(issues[0].fix, Some(Fix::Format));
         assert_eq!(
             issues[0].message,
             "2 file(s) need formatting; run crabenv format"
         );
+        assert_eq!(issues[0].paths.len(), 2);
+    }
+
+    fn test_issue(severity: Severity, message: &str) -> Issue {
+        Issue {
+            code: "test".to_string(),
+            severity,
+            message: message.to_string(),
+            owner: None,
+            paths: Vec::new(),
+            remediation: "test".to_string(),
+            fix: None,
+        }
     }
 
     #[test]
     fn doctor_issue_count_ignores_info_notes() {
-        let issues = vec![Issue {
-            severity: Severity::Info,
-            message: "DEV_DISABLE_EMAILS exists in local but is missing from schema and template"
-                .to_string(),
-            fix: None,
-        }];
+        let issues = vec![test_issue(
+            Severity::Info,
+            "DEV_DISABLE_EMAILS exists in local but is missing from schema and template",
+        )];
 
         assert_eq!(actionable_doctor_issue_count(&issues), 0);
     }
@@ -1678,24 +1891,27 @@ export const privateEnv = createEnv({
     #[test]
     fn doctor_issue_count_counts_warnings_and_errors() {
         let issues = vec![
-            Issue {
-                severity: Severity::Info,
-                message: "local-only note".to_string(),
-                fix: None,
-            },
-            Issue {
-                severity: Severity::Warn,
-                message: "warning".to_string(),
-                fix: None,
-            },
-            Issue {
-                severity: Severity::Error,
-                message: "error".to_string(),
-                fix: None,
-            },
+            test_issue(Severity::Info, "local-only note"),
+            test_issue(Severity::Warn, "warning"),
+            test_issue(Severity::Error, "error"),
         ];
 
         assert_eq!(actionable_doctor_issue_count(&issues), 2);
+    }
+
+    #[test]
+    fn doctor_check_fails_only_on_error_severity() {
+        assert_eq!(
+            doctor_error_count(&[
+                test_issue(Severity::Info, "info"),
+                test_issue(Severity::Warn, "warn"),
+            ]),
+            0
+        );
+        assert_eq!(
+            doctor_error_count(&[test_issue(Severity::Error, "error")]),
+            1
+        );
     }
 
     #[test]
@@ -1711,7 +1927,7 @@ export const privateEnv = createEnv({
 
         assert_eq!(build_format_plan(&project).unwrap().len(), 1);
 
-        apply_fixes(&project, &[Fix::Format]).unwrap();
+        apply_fixes(&project, &[Fix::Format], false).unwrap();
 
         assert!(build_format_plan(&project).unwrap().is_empty());
     }
@@ -1755,6 +1971,7 @@ export const privateEnv = createEnv({
                     name: "PORT".to_string(),
                 },
             ],
+            false,
         )
         .unwrap();
 

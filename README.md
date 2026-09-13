@@ -4,6 +4,8 @@ The simplest, opinionated way to keep .env files, schemas, and examples aligned.
 
 `crabenv` is an env var management standard created by [Carlo Taleon](http://carlo.tl) to minimize env var schema + documentation drift in any codebase. If you follow this standard, you'll find it extremely seamless to "develop locally" and "deploy to production" in any platform!
 
+Crabenv keeps env files organized and schemas, templates, and CI wiring in sync. It focuses on convenience and correctness—not secret storage, leak prevention, or preventing AI tools from reading your env files. It is not a secret manager.
+
 ## Why use it
 
 - [x] Typesafety & Validation
@@ -135,6 +137,20 @@ crabenv update {VARIABLE_NAME} # Same flags as add
 ```
 
 ## Documentation
+
+### CI checks and diagnostics
+
+```sh
+crabenv doctor --repo-only --check # fail on errors; no local .env contents needed
+crabenv format --check             # fail if files need formatting; never writes
+crabenv doctor --repo-only --json  # structured diagnostics for scripts/agents
+```
+
+`doctor --check` exits 1 for error-severity findings; warnings and informational findings do not fail the check. Template and managed-sink drift currently remain warnings. Plain `doctor` stays advisory. Combine `--json --check` for JSON output with the same exit policy.
+
+Formatting preserves quoted multiline blocks and moves directly attached comments with their variables. Blank-separated headers stay in place. Files with variable interpolation, unsupported active syntax, or active duplicate keys across sections are left unchanged rather than reordered unsafely. Formatting is not value validation.
+
+See the [CLI guide](docs/cli-guide.md) for diagnostic fields, issue codes, and formatter limits.
 
 https://crabenv.pages.dev
 

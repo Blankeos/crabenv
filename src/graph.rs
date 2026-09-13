@@ -11,7 +11,16 @@ use crate::util::display_path;
 pub type EnvGraph = BTreeMap<(PathBuf, String), EnvRecord>;
 
 pub fn build_graph(project: &Project) -> Result<EnvGraph> {
-    let sources = collect_sources(project)?;
+    build_graph_filtered(project, true)
+}
+
+/// Build the env graph, optionally skipping local `.env` reads.
+///
+/// Pass `include_local = false` for repository-only doctor mode so CI can run
+/// without local secrets on disk. Local-dependent issues must also be
+/// filtered via `collect_issues_filtered(..., repo_only = true)`.
+pub fn build_graph_filtered(project: &Project, include_local: bool) -> Result<EnvGraph> {
+    let sources = collect_sources_filtered(project, include_local)?;
     let mut graph = EnvGraph::new();
     let root_local_names = sources
         .iter()
@@ -113,12 +122,19 @@ pub fn build_graph(project: &Project) -> Result<EnvGraph> {
 }
 
 pub fn collect_sources(project: &Project) -> Result<Vec<VarSource>> {
+    collect_sources_filtered(project, true)
+}
+
+pub fn collect_sources_filtered(project: &Project, include_local: bool) -> Result<Vec<VarSource>> {
     let mut sources = Vec::new();
     let workspace_adapters = adapters::workspace_adapters();
     let project_adapters = adapters::project_adapters();
 
     for workspace in app_workspaces(project) {
         for adapter in &workspace_adapters {
+            if !include_local && is_local_adapter(adapter.name()) {
+                continue;
+            }
             sources.extend(adapter.collect(project, workspace).with_context(|| {
                 format!(
                     "{} adapter failed for {}",
@@ -130,6 +146,9 @@ pub fn collect_sources(project: &Project) -> Result<Vec<VarSource>> {
     }
 
     for adapter in &project_adapters {
+        if !include_local && is_local_adapter(adapter.name()) {
+            continue;
+        }
         sources.extend(
             adapter
                 .collect(project)
@@ -137,4 +156,8 @@ pub fn collect_sources(project: &Project) -> Result<Vec<VarSource>> {
         );
     }
     Ok(sources)
+}
+
+fn is_local_adapter(name: &str) -> bool {
+    matches!(name, "dotenv-local" | "dotenv-root-local")
 }

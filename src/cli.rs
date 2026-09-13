@@ -89,6 +89,21 @@ pub struct DoctorArgs {
     pub fix: bool,
     #[arg(long, help = "Apply fixes instead of only printing the fix plan")]
     pub yes: bool,
+    #[arg(
+        long,
+        help = "CI gate: exit 1 if any error-severity issue remains (warnings/infos never fail)"
+    )]
+    pub check: bool,
+    #[arg(
+        long,
+        help = "Print pure machine-readable JSON to stdout (no human table/inventory)"
+    )]
+    pub json: bool,
+    #[arg(
+        long,
+        help = "Repository-only mode: skip local-secret checks and do not read .env contents"
+    )]
+    pub repo_only: bool,
 }
 
 #[derive(Args, Clone)]

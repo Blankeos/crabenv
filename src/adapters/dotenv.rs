@@ -360,11 +360,12 @@ fn parse_section_body(section: RawSection) -> ParsedSection {
     for line in section.lines {
         if let Some((key, _commented)) = parse_entry_key(&line) {
             let mut lines = Vec::new();
-            if saw_entry_or_loose {
-                lines.append(&mut pending);
-            } else if !pending.is_empty() {
-                leading.append(&mut pending);
-            }
+            // Contiguous comments immediately before an entry travel with
+            // that entry, including the very first entry in a section.
+            // Only blank-separated comments stay as `leading` (file/section
+            // header): blanks flush `pending` to `leading` above, so any
+            // `pending` here is contiguous and must be attached.
+            lines.append(&mut pending);
             lines.push(line);
             entries.push(DotenvEntryBlock {
                 key,
@@ -516,12 +517,15 @@ SESSION_SECRET="$(openssl rand -base64 32)"
 
         let formatted = format_contents(input);
 
+        // Contiguous comments before the first entry travel with that entry
+        // (here `RESEND_FROM`), not as a file header. Only blank-separated
+        // headers stay at the top (see `file_header_separated_by_blank_*`).
         assert_eq!(
             formatted,
-            r#"# Defaults/docs live in schemas
-NODE_ENV="development"
+            r#"NODE_ENV="development"
 
 RESEND_API_KEY=""
+# Defaults/docs live in schemas
 RESEND_FROM="Team <team@example.com>"
 
 # Bucket comment
@@ -1130,6 +1134,27 @@ pub fn format_contents(contents: &str) -> String {
         // unchanged so a malformed active quote is never reformatted away.
         Err(_) => return contents.to_string(),
     };
+    // Conservative no-op for unsafe-to-reorder files. `export` / shell-like
+    // lines, bare words (`HELLO`, `FOO: bar`), and active variable
+    // interpolation (`$VAR` / `${VAR}`) can depend on file order for
+    // sequential-expansion loaders. Reordering them could change runtime
+    // values, so the formatter preserves the input unchanged instead of
+    // guessing. `$(...)` command templates have no intra-file dependency and
+    // remain sortable; single-quoted literals and escaped `\$` are also safe.
+    // Malformed active quotes already return above; this covers the remaining
+    // order-sensitive cases without a broad parser rewrite.
+    if contains_unsafe_to_sort(&sections) {
+        return contents.to_string();
+    }
+    // Conservative no-op for repeated active keys spanning sections.
+    // Section reordering (`shared` before `apps/*`) and local-only promotion
+    // (`move_local_only_duplicates_next_to_templates`) can change global
+    // last-wins order or move duplicates across sections. Intra-section
+    // duplicates stay stable (sorted together, input order preserved) and
+    // remain sortable; only cross-section active repeats are unsafe.
+    if has_cross_section_active_duplicates(&sections) {
+        return contents.to_string();
+    }
     let mut sections = sections;
     if sections.iter().any(|section| section.header.is_some()) {
         sections.sort_by(|left, right| compare_sections(left, right));
@@ -1149,6 +1174,238 @@ pub fn format_contents(contents: &str) -> String {
     }
 
     format!("{}\n", output.join("\n").trim_end())
+}
+
+/// True when any logical line is unsafe to reorder, requiring a conservative
+/// no-op (preserve input unchanged) instead of sorting.
+///
+/// Guarantees:
+/// - Active `export VAR=...`, bare words, `FOO: bar`, and any other active
+///   loose syntax (non-entry, non-comment, non-blank, non-header) are unsafe:
+///   their shell/dotenv semantics are unknown, so they stay in place via
+///   no-op.
+/// - Active variable interpolation (`$VAR` / `${VAR}` / `$VAR_suffix`,
+///   including `${VAR:-default}` forms) outside single quotes is unsafe for
+///   sequential-expansion loaders (`dotenv-expand`, `python-dotenv` with
+///   interpolation). Only active assignments are checked; commented
+///   (`# KEY=...`) entries are inactive and safe.
+/// - Safe (sortable): plain comments, section headers (`# ---- ... ----`),
+///   blank lines, active/commented plain assignments, intra-section
+///   duplicates (stable order preserves last-wins), multiline quoted blocks
+///   (kept together), `$(...)` command templates, single-quoted `$`
+///   literals, escaped `\$`. Cross-section active duplicates are handled
+///   separately by `has_cross_section_active_duplicates` (conservative
+///   no-op) since section reordering/local-only promotion could change
+///   last-wins.
+fn contains_unsafe_to_sort(sections: &[RawSection]) -> bool {
+    for section in sections {
+        for line in &section.lines {
+            if line.trim().is_empty() {
+                continue;
+            }
+            if is_section_header(line) {
+                continue;
+            }
+            if parse_entry_key(line).is_some() {
+                // Only active assignments can carry order-dependent expansion.
+                if parse_assignment_key(line).is_some() && line_has_variable_interpolation(line) {
+                    return true;
+                }
+                continue;
+            }
+            // Plain comments (including commented `export ...` or commented
+            // quotes) are inactive for loaders.
+            if line.trim_start().starts_with('#') {
+                continue;
+            }
+            // Active loose syntax: unknown ordering semantics, preserve in place.
+            return true;
+        }
+    }
+    false
+}
+
+/// Detect active variable interpolation in an assignment's value part.
+///
+/// Never expands or modifies values; only reports whether reordering could
+/// change sequential-expansion results. `$(...)` is explicitly allowed (no
+/// intra-file dependency). Single-quoted `$` and escaped `\$` are literals.
+fn line_has_variable_interpolation(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    let rest = if let Some(stripped) = trimmed.strip_prefix("export ") {
+        stripped.trim_start()
+    } else {
+        trimmed
+    };
+    let Some(eq_pos) = rest.find('=') else {
+        return false;
+    };
+    let raw_value = &rest[eq_pos + 1..];
+    // Ignore `$` inside trailing ` # comment` (not part of the value).
+    let value = strip_inline_comment(raw_value);
+    let chars: Vec<char> = value.chars().collect();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escaped = false;
+    let mut idx = 0;
+    while idx < chars.len() {
+        let ch = chars[idx];
+        if escaped {
+            escaped = false;
+            idx += 1;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            idx += 1;
+            continue;
+        }
+        if in_single {
+            if ch == '\'' {
+                in_single = false;
+            }
+            idx += 1;
+            continue;
+        }
+        if in_double {
+            if ch == '"' {
+                in_double = false;
+                idx += 1;
+                continue;
+            }
+            if ch == '$' {
+                if let Some(next) = chars.get(idx + 1) {
+                    if *next == '(' {
+                        idx += 2;
+                        continue;
+                    }
+                    if *next == '{' || next.is_ascii_alphanumeric() || *next == '_' || *next == '$'
+                    {
+                        return true;
+                    }
+                }
+            }
+            idx += 1;
+            continue;
+        }
+        if ch == '\'' {
+            in_single = true;
+            idx += 1;
+            continue;
+        }
+        if ch == '"' {
+            in_double = true;
+            idx += 1;
+            continue;
+        }
+        if ch == '$' {
+            if let Some(next) = chars.get(idx + 1) {
+                if *next == '(' {
+                    idx += 2;
+                    continue;
+                }
+                if *next == '{' || next.is_ascii_alphanumeric() || *next == '_' || *next == '$' {
+                    return true;
+                }
+            }
+        }
+        idx += 1;
+    }
+    // Unclosed single quote (e.g., an apostrophe in `don't $VAR`): the `'`
+    // was almost certainly a literal, not a quoting delimiter, so any `$`
+    // after it was incorrectly ignored above. Rescan treating `'` as a
+    // literal (still respecting escapes, double quotes, and `$(...)`).
+    if in_single && has_unquoted_interpolation_fallback(&chars) {
+        return true;
+    }
+    false
+}
+
+/// Fallback scan for unclosed single quotes: look for unsafe `$` refs
+/// while treating `'` as a literal. Double quotes, escapes, and `$(...)`
+/// are still respected; `'` is ignored.
+fn has_unquoted_interpolation_fallback(chars: &[char]) -> bool {
+    let mut in_double = false;
+    let mut escaped = false;
+    let mut idx = 0;
+    while idx < chars.len() {
+        let ch = chars[idx];
+        if escaped {
+            escaped = false;
+            idx += 1;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            idx += 1;
+            continue;
+        }
+        if in_double {
+            if ch == '"' {
+                in_double = false;
+            } else if ch == '$' {
+                if let Some(next) = chars.get(idx + 1) {
+                    if *next != '('
+                        && (*next == '{'
+                            || next.is_ascii_alphanumeric()
+                            || *next == '_'
+                            || *next == '$')
+                    {
+                        return true;
+                    }
+                }
+            }
+            idx += 1;
+            continue;
+        }
+        if ch == '"' {
+            in_double = true;
+            idx += 1;
+            continue;
+        }
+        // `'` is intentionally a literal here.
+        if ch == '$' {
+            if let Some(next) = chars.get(idx + 1) {
+                if *next != '('
+                    && (*next == '{'
+                        || next.is_ascii_alphanumeric()
+                        || *next == '_'
+                        || *next == '$')
+                {
+                    return true;
+                }
+            }
+        }
+        idx += 1;
+    }
+    false
+}
+
+/// True when the same active key appears in more than one section.
+///
+/// Section reordering (`shared` before `apps/*`) and local-only promotion
+/// can change global last-wins order for such files, so the formatter
+/// conservatively leaves them unchanged. Duplicates confined to a single
+/// section stay sortable: within-section sorting is stable, preserving
+/// input order and last-wins. Only active (`KEY=...`) assignments count;
+/// commented (`# KEY=...`) entries are inactive for loaders.
+fn has_cross_section_active_duplicates(sections: &[RawSection]) -> bool {
+    use std::collections::HashMap;
+    let mut first_section: HashMap<String, usize> = HashMap::new();
+    for (index, section) in sections.iter().enumerate() {
+        for line in &section.lines {
+            if let Some(key) = parse_assignment_key(line) {
+                if let Some(previous) = first_section.get(&key) {
+                    if *previous != index {
+                        return true;
+                    }
+                } else {
+                    first_section.insert(key, index);
+                }
+            }
+        }
+    }
+    false
 }
 
 fn move_local_only_duplicates_next_to_templates(sections: &mut Vec<RawSection>) {

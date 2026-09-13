@@ -67,7 +67,7 @@ function demoteHeadings(markdown: string) {
 function skillContent(indexBody: string, cliGuideBody: string) {
   return `---
 name: crabenv
-description: Understand and apply the crabenv env var management standard: one local env, aligned schemas, templates, docs, and deployment sinks across languages.
+description: Read when you need to add, update, or delete env vars. Understand and apply the crabenv env var management standard: one local env, aligned schemas, templates, docs, and deployment sinks across languages.
 ---
 
 ${stripFrontmatter(indexBody).trim()}

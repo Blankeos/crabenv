@@ -122,12 +122,26 @@ pub struct DotenvEntry {
 
 #[derive(Clone, Debug)]
 pub struct Issue {
+    /// Stable machine-readable code (kebab-case, never renamed without major bump).
+    /// See `doctor --json` output. Known codes:
+    /// `sink-drift`, `missing-local-env`, `monorepo-local-misplaced`,
+    /// `package-owns-env`, `schema-without-template`, `template-without-schema`,
+    /// `public-missing-runtime-strict`, `public-var-missing-runtime-strict`,
+    /// `missing-with-env-script`, `required-missing-from-local`,
+    /// `local-only-var`, `needs-formatting`.
+    pub code: String,
     pub severity: Severity,
     pub message: String,
+    /// Owning app rel (e.g. `apps/web` or `.`) where known.
+    pub owner: Option<PathBuf>,
+    /// Affected files (absolute paths; rendered repo-relative in `--json`).
+    pub paths: Vec<PathBuf>,
+    /// Human-readable next step (e.g. `run crabenv copy ...`).
+    pub remediation: String,
     pub fix: Option<Fix>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Severity {
     Info,
     Warn,

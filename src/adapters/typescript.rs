@@ -143,11 +143,15 @@ pub fn check_public_runtime_strict(
     let contents = fs::read_to_string(path)?;
     if !contents.contains("runtimeEnvStrict") {
         issues.push(Issue {
+            code: "public-missing-runtime-strict".to_string(),
             severity: Severity::Error,
             message: format!(
                 "{} public schema must use runtimeEnvStrict",
                 crate::util::display_rel(owner)
             ),
+            owner: Some(owner.to_path_buf()),
+            paths: vec![path.to_path_buf()],
+            remediation: "add runtimeEnvStrict mapping for every public variable".to_string(),
             fix: None,
         });
         return Ok(());
@@ -163,12 +167,16 @@ pub fn check_public_runtime_strict(
     for name in client_vars {
         if !strict_block.contains(&name) {
             issues.push(Issue {
+                code: "public-var-missing-runtime-strict".to_string(),
                 severity: Severity::Error,
                 message: format!(
                     "{} is public in {} but missing from runtimeEnvStrict",
                     name,
                     crate::util::display_rel(owner)
                 ),
+                owner: Some(owner.to_path_buf()),
+                paths: vec![path.to_path_buf()],
+                remediation: format!("add {name}: process.env.{name} to runtimeEnvStrict"),
                 fix: None,
             });
         }
