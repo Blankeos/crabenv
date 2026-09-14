@@ -93,7 +93,7 @@ Regardless of the language or mix of languages in your repositories, you'll be a
 Completely optional, but in case you want your agent to be autonomous when adding new env vars... Install the crabenv skill for coding agents with:
 
 ```sh
-npx skills add blankeos/crabenv
+crabenv skill # thin wrapper around npx skills (or: npx skills add blankeos/crabenv)
 ```
 
 ## Useful commands you should know

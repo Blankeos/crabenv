@@ -10,7 +10,7 @@ use cliclack::{
 use serde::Serialize;
 
 use crate::adapters::{dotenv, python, rust, typescript};
-use crate::cli::{AttachArgs, CopyArgs, DoctorArgs, FormatArgs, ListArgs, MutateArgs, RemoveArgs};
+use crate::cli::{AttachArgs, CopyArgs, DoctorArgs, FormatArgs, ListArgs, MutateArgs, RemoveArgs, SkillArgs};
 use crate::copy_plan::{build_copy_plan, build_root_example_plan};
 use crate::discovery::app_workspaces;
 use crate::graph::{build_graph, build_graph_filtered, EnvGraph};
@@ -989,6 +989,71 @@ pub fn run_copy(project: &Project, args: CopyArgs) -> Result<()> {
     apply_copy_plan(&plan)?;
 
     Ok(())
+}
+
+pub fn run_skill(args: SkillArgs) -> Result<()> {
+    const SOURCE: &str = "blankeos/crabenv";
+    let mut cmd: Vec<String> = vec![
+        "npx".to_string(),
+        "skills".to_string(),
+        "add".to_string(),
+        SOURCE.to_string(),
+    ];
+    if args.global {
+        cmd.push("--global".to_string());
+    }
+    if let Some(agents) = &args.agent {
+        let agents: Vec<&str> = agents
+            .iter()
+            .flat_map(|entry| entry.split(','))
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+            .collect();
+        if !agents.is_empty() {
+            cmd.push("--agent".to_string());
+            cmd.extend(agents.iter().map(|entry| entry.to_string()));
+        }
+    }
+    if args.yes {
+        cmd.push("--yes".to_string());
+    }
+
+    let display = shell_join(&cmd);
+    if args.dry_run {
+        println!("{display}");
+        return Ok(());
+    }
+
+    println!("{display}");
+    let status = std::process::Command::new(&cmd[0])
+        .args(&cmd[1..])
+        .status()
+        .with_context(|| {
+            format!(
+                "failed to run `{display}`; is Node.js/npx installed? Or run it manually: npx skills add {SOURCE}"
+            )
+        })?;
+    if !status.success() {
+        bail!("`{display}` failed; run it manually: npx skills add {SOURCE}");
+    }
+    Ok(())
+}
+
+fn shell_join(parts: &[String]) -> String {
+    parts
+        .iter()
+        .map(|part| {
+            if part
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || "-_./:=+@".contains(ch))
+            {
+                part.clone()
+            } else {
+                format!("'{}'", part.replace('\'', "'\\''"))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn apply_copy_plan(plan: &crate::models::CopyPlan) -> Result<()> {

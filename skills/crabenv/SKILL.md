@@ -13,6 +13,20 @@ It's available as:
 
 You're currently reading the "skill" / "guide". If you're planning to use the CLI, just read the concepts and then use `crabenv --help` and you'll understand how to use it.
 
+## Getting started
+
+**New project:**
+
+```sh
+crabenv init   # create missing schema + .env.example surfaces (never overwrites)
+crabenv copy   # create local .env from examples (keeps existing values)
+crabenv doctor # fix drift until clean
+```
+
+**Existing project:** ask your agent to align envs to this guide until `crabenv doctor` is clean.
+
+Then `crabenv add/update/remove` for changes, `crabenv ls -p` for inventory.
+
 ## Goals
 
 - [x] Typesafety & Validation
@@ -103,6 +117,7 @@ crabenv doctor --repo-only --check # CI gate without reading local .env contents
 crabenv doctor --repo-only --json  # machine-readable diagnostics
 crabenv format        # or fmt: sort/group env files and supported schemas
 crabenv format --check # fail on formatting drift, without writing
+crabenv skill         # install agent skill (thin wrapper around npx skills)
 ```
 
 GitHub Actions sinks are supported through managed `gha-env` and `gha-echo` blocks. See [Sinks](./sinks/index.md).

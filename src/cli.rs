@@ -81,6 +81,12 @@ pub enum Commands {
         after_help = "Examples:\n  crabenv remove DATABASE_URL --owner apps/next-web\n  crabenv remove DATABASE_URL --shared\n  crabenv remove DATABASE_URL --shared apps/hono-api apps/next-web\n  crabenv remove NEXT_PUBLIC_API_URL --owner apps/next-web --public"
     )]
     Remove(RemoveArgs),
+    #[command(
+        about = "Install the crabenv agent skill",
+        long_about = "Install the crabenv agent skill via `npx skills add blankeos/crabenv`. Thin wrapper, no custom installer.",
+        after_help = "Examples:\n  crabenv skill\n  crabenv skill --global\n  crabenv skill --agent claude-code --yes\n  crabenv skill --dry-run"
+    )]
+    Skill(SkillArgs),
 }
 
 #[derive(Args)]
@@ -271,6 +277,31 @@ pub struct AttachArgs {
         help = "Target owner to add the existing contract to"
     )]
     pub owner: Option<PathBuf>,
+}
+
+#[derive(Args, Clone)]
+pub struct SkillArgs {
+    #[arg(
+        short = 'g',
+        long,
+        help = "Install skill globally (user-level) instead of project-level"
+    )]
+    pub global: bool,
+
+    #[arg(
+        short = 'a',
+        long,
+        value_name = "AGENT",
+        num_args = 1..,
+        help = "Target specific agents (e.g. --agent claude-code cursor)"
+    )]
+    pub agent: Option<Vec<String>>,
+
+    #[arg(short = 'y', long, help = "Skip confirmation prompts")]
+    pub yes: bool,
+
+    #[arg(long, help = "Print the underlying npx skills command without running it")]
+    pub dry_run: bool,
 }
 
 #[derive(Args, Clone)]

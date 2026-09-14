@@ -37,5 +37,6 @@ fn main() -> Result<()> {
         Commands::Attach(args) => commands::run_attach(&project, args),
         Commands::Update(args) => commands::run_add_or_update(&project, args, true),
         Commands::Remove(args) => commands::run_remove(&project, args),
+        Commands::Skill(args) => commands::run_skill(args),
     }
 }

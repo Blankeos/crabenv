@@ -20,6 +20,7 @@ crabenv doctor --repo-only --check # CI gate without reading local .env contents
 crabenv doctor --repo-only --json  # machine-readable diagnostics
 crabenv format        # or fmt: sort/group env files and supported schemas
 crabenv format --check # fail on formatting drift, without writing
+crabenv skill         # install agent skill (thin wrapper around npx skills)
 ```
 
 GitHub Actions sinks are supported through managed `gha-env` and `gha-echo` blocks. See [Sinks](./sinks/index.md).
